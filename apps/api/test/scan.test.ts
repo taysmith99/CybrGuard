@@ -108,6 +108,38 @@ afterEach(() => {
 });
 
 describe('verified paid scan flow (offline fictional provider and email)', () => {
+  it('requires staging configuration and HTTPS, limits sign-in to testers, and keeps auth enforced', async () => {
+    env.APP_ENV = 'staging';
+    const origin = 'https://api.cybrguard.app';
+    expect((await app.request(`${origin}/v1/health`, {}, env)).status).toBe(503);
+    env.STAGING_ALLOWED_EMAILS = email;
+    expect((await app.request('http://api.cybrguard.app/v1/health', {}, env)).status).toBe(503);
+    expect((await app.request('https://other.example.com/v1/health', {}, env)).status).toBe(503);
+    const health = await app.request(`${origin}/v1/health`, {}, env);
+    expect(health.status).toBe(200);
+    expect(health.headers.get('Strict-Transport-Security')).toBe('max-age=31536000');
+    expect(await health.json()).toMatchObject({ environment: 'staging' });
+    const send = (address: string) =>
+      app.request(
+        `${origin}/v1/auth/start`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: address, consent: true, deviceId: device }),
+        },
+        env,
+      );
+    expect((await send('unapproved@example.com')).status).toBe(403);
+    expect(deliveredCode).toBe('');
+    expect(
+      database.raw.prepare('SELECT COUNT(*) AS count FROM email_verifications').get()?.count,
+    ).toBe(0);
+    expect((await send(email)).status).toBe(202);
+    expect(deliveredCode).toMatch(/^\d{6}$/);
+    expect((await app.request(`${origin}/v1/me`, {}, env)).status).toBe(401);
+    expect(providerCalls).toBe(0);
+  });
+
   it('accepts XXX-XXX codes and rejects eight-digit or malformed codes', async () => {
     const challengeId = await start();
     for (const code of ['12345678', '12-3456', '123-45']) {

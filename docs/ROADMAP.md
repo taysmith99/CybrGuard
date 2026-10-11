@@ -16,7 +16,7 @@
 Real mailbox delivery, verification, signed-in session persistence and the paid scan have passed end to end in the simulator, with a result screenshot captured. API checks (75 tests), Swift core tests (20 tests), signed simulator build and six reserved-address live provider checks passed.
 
 1. Confirm complete XON storage/cache permissions and purchased quota/burst limits in the provider console.
-2. Provision an explicit HTTPS development/staging backend for physical iPhone testing; local serving is not an internet deployment.
+2. Test on a signed physical iPhone using the deployed HTTPS staging backend at `api.cybrguard.app`. Staging has an isolated D1 database and keys, tester-only sign-in, and verified HTTPS health/access controls.
 
 ## M2 — subscriptions and premium details
 

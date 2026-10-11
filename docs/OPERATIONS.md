@@ -2,7 +2,7 @@
 
 ## Local setup and secrets
 
-Run the root README commands. The Worker uses a local D1 database and is bound to `127.0.0.1:8788`. `db:migrate:local` always selects `--local`. No remote database or public API route has been provisioned.
+Run the root README commands. The Worker uses a local D1 database and is bound to `127.0.0.1:8788`. `db:migrate:local` always selects `--local`. Restricted staging has a separate remote D1 database and HTTPS custom domain; local commands still operate only on local data.
 
 `npm run dev:setup` reads the ignored root `.env` without executing it. Supported variables: `XON_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_EMAIL_TOKEN` (mapped to Worker secret `CLOUDFLARE_EMAIL_API_TOKEN`), `CLOUDFLARE_EMAIL_API_TOKEN`, and `EMAIL_FROM`. It copies only supported values to ignored `apps/api/.dev.vars`, preserves/generates encryption/HMAC keys and sets mode `live` if an XON key is present. Configuration is written with mode 0600 and values are never printed. Restart Wrangler after re-running setup. Do not delete/rotate generated keys without a data migration; existing protected emails would become unreadable or unfindable.
 
@@ -38,17 +38,18 @@ Email encryption uses AES-256-GCM with a fresh IV. Lookups and OTP hashes use a 
 
 Verification challenges expire after 10 minutes. Sign-in requests lazily remove challenges more than an hour past expiry, sessions more than a day past family expiry, and abuse counters older than 24 hours. This is development cleanup, not a production scheduled retention system. Account deletion immediately deletes challenges for the email, then the account and cascading email/count/sessions. Shared pseudonymous abuse counters may remain for up to 24 hours. It does not remove upstream historical breach records or Cloudflare mail-delivery records.
 
-## Environment and deployment gate
+## Staging deployment
 
-| Concern | Development | Staging/production |
-| --- | --- | --- |
-| Worker/API | Local loopback | Runtime blocked; not provisioned |
-| D1 | Local migrations | Separate databases required |
-| Secrets | Ignored `.dev.vars` | Cloudflare secrets and rotation plan required |
-| Email | Real Cloudflare REST when configured | Sender/account readiness and delivery verification required |
-| XON | Real paid API after verification | Contract/rate/privacy review required |
-| Billing/monitoring/APNs | Not implemented | Required before advertising these features |
+The Worker `cybrguard-api-staging` serves **https://api.cybrguard.app**, using D1 `cybrguard-staging`. Production runtime remains blocked. Public workers.dev and preview URLs and request tracing remain disabled. Staging accepts only the HTTPS custom domain and sign-in emails listed in the `STAGING_ALLOWED_EMAILS` secret. This is a small tester environment, not an open public launch.
 
-`npm run build:api` is a dry run only. Wrangler disables public `workers.dev`/preview routes and no deployment command has been added. A physical iPhone needs a trusted HTTPS development/staging endpoint; changing to a LAN HTTP origin is intentionally rejected by the app. Do not claim an iPhone backend or live production service exists until it has been explicitly provisioned and verified.
+Store the deployment token as `CLOUDFLARE_API_TOKEN` in ignored root `.env`; the script can also use the existing `CLOUDFLARE_EMAIL_TOKEN` if its permissions have been expanded. Required scopes: **Account Workers Scripts Edit and D1 Edit; Zone Workers Routes Edit, Zone Read and DNS Edit**, limited to the intended account and `cybrguard.app`. Outbound Email Sending permission remains required for the runtime email token. The deployment credential is never uploaded under `CLOUDFLARE_API_TOKEN` to the Worker.
 
-Before enabling deployment: establish separate environments, correct bindings/backups, production rate/perimeter controls, scheduled retention and key rotation, consent/legal notices, email delivery handling, monitoring/observability and operational incident procedures. Later App Store/RevenueCat/APNs setup is described in the roadmap/billing guide.
+Run `npm run check`, then `npm run deploy:staging`. The command checks zone/account visibility, creates or reuses only `cybrguard-staging`, applies remote migrations, and deploys the custom domain and runtime secrets. It does not touch other Workers/databases. Cloudflare manages DNS and the custom-domain HTTPS certificate. Verify `GET /v1/health` returns 200 with `environment: staging` and `dataMode: live`; DNS/certificate propagation can outlast the upload command, so check again if upload succeeds but initial health lookup fails. Never disable certificate validation.
+
+Independent staging encryption/HMAC keys, runtime credentials and tester allowlist are persisted in ignored `.env.staging` with mode 0600. Back this up securely; do not replace keys on redeploy. If a staging database already exists and the file is missing, the script stops instead of generating incompatible keys. Edit the allowlist in `.env.staging` for subsequent deployments. The local `.dev.vars` keys/database and sessions are unchanged. A first staging sign-in requires a new real verification code.
+
+For iPhone testing, copy `apps/ios/Config/Staging.xcconfig.example` to ignored `apps/ios/Config/Local.xcconfig`, add your Apple signing team, regenerate the project and run from Xcode on the connected phone. The app uses `https://api.cybrguard.app` and `API_ENVIRONMENT=staging`; no server secrets enter the app.
+
+Verified deployment checks: trusted HTTPS health 200, no-store and HSTS headers, unauthenticated account 401, unapproved email 403 without sending mail, and invalid challenge 400. Actual mailbox verification/scan must still be completed independently against staging; local simulator results are not staging results.
+
+`npm run build:api` remains a local dry run. Before production: establish separate production resources, backups, perimeter/abuse controls, scheduled retention, key rotation, consent/legal notices, email delivery operations and operational incident procedures. App Store/RevenueCat/APNs setup remains on the roadmap; staging does not implement subscriptions, premium details, scheduled monitoring or push notifications.

@@ -30,7 +30,8 @@
     "test:xon": "node scripts/test-xon-api.mjs",
     "check": "npm run lint && npm run typecheck && npm test",
     "ios:generate": "cd apps/ios && xcodegen generate",
-    "test:ios:core": "swift test --package-path apps/ios"
+    "test:ios:core": "swift test --package-path apps/ios",
+    "deploy:staging": "node scripts/deploy-staging.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

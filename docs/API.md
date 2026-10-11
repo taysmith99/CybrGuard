@@ -2,7 +2,7 @@
 
 Base URL for local development: `http://localhost:8788`. JSON requests/responses use `Cache-Control: no-store` and server-generated `X-Request-ID`. Errors contain `{ "error": { "code", "message", "requestId" } }`; rate limits also set `Retry-After` in seconds. Validation errors never echo request bodies. Requests are limited to 4 KiB.
 
-All account routes require `DATA_MODE=live`, persistent encryption/HMAC keys and an XON key. The runtime rejects staging/production until release prerequisites are implemented. Health accepts unconfigured development mode.
+All account routes require `DATA_MODE=live`, persistent encryption/HMAC keys and an XON key. Staging is available at `https://api.cybrguard.app`; it requires live configuration, Cloudflare sending configuration and the `STAGING_ALLOWED_EMAILS` secret. Staging accepts only its HTTPS origin and rejects unapproved sign-in emails with 403 `forbidden`. Production remains blocked. Health accepts unconfigured development mode.
 
 ## Verification and sessions
 

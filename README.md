@@ -1,10 +1,10 @@
 # CybrGuard
 
-A plain SwiftUI iPhone app with a local Cloudflare Workers API and paid **xonAPI+** breach counts. The implementation brief is in [AGENTS.md](AGENTS.md).
+A plain SwiftUI iPhone app with a Cloudflare Workers API and paid **xonAPI+** breach counts. The implementation brief is in [AGENTS.md](AGENTS.md).
 
 **Current state:** email ownership verification, device-bound sessions, manual breach counts, local D1 persistence, sign-out and account deletion are connected. Verification mail uses **Cloudflare Email Service**, from `security@cybrguard.app`. XON queries run on the server only, after successful verification and consent. No fake breach data or verification bypass is used by the running app.
 
-Subscriptions, premium breach details, additional addresses, scheduled monitoring and push notifications remain unimplemented. Staging/production serving is deliberately blocked; this is a local development vertical slice, not a release-ready service.
+Subscriptions, premium breach details, additional addresses, scheduled monitoring and push notifications remain unimplemented. Restricted staging is deployed at `https://api.cybrguard.app`. Production remains disabled; this is not a release-ready service.
 
 ## Local development
 
@@ -55,7 +55,13 @@ Select the **Exposure** scheme and an iPhone simulator, then press **⌘R**. The
 
 Keep `npm run dev:api` running. Tap **Get started / Sign in**, enter your address, consent, and request a code. Enter the six-digit (XXX-XXX) code from your inbox within 10 minutes. Once verified, tap **Scan verified email**. The free result shows the provider's real count and last successful scan time. Errors never become zero-breach results.
 
-A physical iPhone requires an Apple signing team and a reachable HTTPS backend; its `localhost` points to the phone itself. No remote backend has been provisioned or deployed. See [iOS setup](apps/ios/README.md).
+A physical iPhone requires an Apple signing team and a reachable HTTPS backend; its `localhost` points to the phone itself. Use staging at `https://api.cybrguard.app` with `API_ENVIRONMENT=staging`. Sign-in is restricted to the configured tester mailbox. See [iOS setup](apps/ios/README.md).
+
+## Deploy staging
+
+`npm run deploy:staging` creates/reuses the isolated staging D1 database, applies remote migrations and deploys the custom domain with runtime secrets. It reads the deployment token from `CLOUDFLARE_API_TOKEN` in ignored `.env` (or the existing `CLOUDFLARE_EMAIL_TOKEN` when that token also has deployment permissions). Add `STAGING_ALLOWED_EMAILS` for the initial comma-separated tester allowlist. See [operations](docs/OPERATIONS.md) for token permissions and key handling.
+
+Staging encryption/HMAC keys and the allowlist persist in ignored `.env.staging` with private permissions. Preserve this file in a secure backup; redeploying must not replace the encryption keys. Local data and sessions are separate from staging. Public `workers.dev` and preview URLs remain disabled.
 
 ## Checks
 

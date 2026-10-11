@@ -28,7 +28,7 @@ describe('development API boundaries', () => {
     expect(response.headers.get('X-Request-ID')).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it.each(['staging', 'production'])('refuses to serve this scaffold in %s', async (APP_ENV) => {
+  it.each(['production'])('refuses to serve this scaffold in %s', async (APP_ENV) => {
     const env = bindings({ APP_ENV });
     const response = await app.request('/v1/health', {}, env);
     expect(response.status).toBe(503);

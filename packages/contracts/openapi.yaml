@@ -1,13 +1,13 @@
 "openapi": "3.1.0"
 "info":
-  "title": "CybrGuard Local Development API"
+  "title": "CybrGuard API"
   "version": "0.1.0"
-  "description": "Real Cloudflare email verification and paid XON manual counts. Local-only; staging/production blocked. Premium features unavailable."
-"servers": [{"url": "http://localhost:8788", "description": "Local development"}]
+  "description": "Real Cloudflare email verification and paid XON manual counts. Local development and restricted HTTPS staging; production blocked. Premium features unavailable."
+"servers": [{"url": "http://localhost:8788", "description": "Local development"}, {"url": "https://api.cybrguard.app", "description": "Restricted staging"}]
 "paths":
   "/v1/health":
     "get":
-      "summary": "Check local API and migrated database"
+      "summary": "Check API and migrated database"
       "responses":
         "200":
           "description": "Success"

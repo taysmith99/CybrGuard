@@ -21,15 +21,15 @@ In the app: Get started / Sign in → email and provider consent → Send verifi
 
 Connect and trust the phone, enable Developer Mode, sign in to an Apple account in Xcode Settings, and select your team under Signing & Capabilities with automatic signing. Select your connected iPhone and run.
 
-The interface can launch on a physical device, but account/scan requests require a reachable HTTPS backend. `localhost` on the phone refers to the phone, not the Mac. A staging/development endpoint has not yet been provisioned. The app intentionally refuses plain HTTP LAN origins.
+The interface can launch on a physical device, but account/scan requests require a reachable HTTPS backend. `localhost` on the phone refers to the phone, not the Mac. The restricted staging endpoint is `https://api.cybrguard.app`, with `API_ENVIRONMENT=staging`. Local sessions do not transfer; verify your approved tester mailbox again on staging. The app intentionally refuses plain HTTP LAN origins.
 
 Optional ignored Debug overrides:
 
 ```sh
-cp apps/ios/Config/Local.xcconfig.example apps/ios/Config/Local.xcconfig
+cp apps/ios/Config/Staging.xcconfig.example apps/ios/Config/Local.xcconfig
 ```
 
-Set `API_BASE_URL`, the matching `API_ENVIRONMENT` and `DEVELOPMENT_TEAM` there. Preserve the `https:/$()/` xcconfig spelling because literal `//` begins a comment. Do not put server-side API keys in app configuration. The runtime currently rejects staging/production server operation; provisioning/release hardening must precede enabling those environments.
+Set `API_BASE_URL`, the matching `API_ENVIRONMENT` and `DEVELOPMENT_TEAM` there. Preserve the `https:/$()/` xcconfig spelling because literal `//` begins a comment. Do not put server-side API keys in app configuration. Staging is deployed and limited to approved testers. Production remains disabled.
 
 ## Checks
 

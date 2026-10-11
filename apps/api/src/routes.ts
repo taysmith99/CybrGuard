@@ -157,6 +157,17 @@ export function registerRoutes(app: App) {
     requireLive(c.env);
     requireEmailConfiguration(c.env);
     const body = await input(c.req.raw, authStartSchema);
+    if (c.env.APP_ENV === 'staging') {
+      const allowed = (c.env.STAGING_ALLOWED_EMAILS ?? '')
+        .split(',')
+        .map((email) => email.trim().toLowerCase());
+      if (!allowed.includes(body.email))
+        throw new APIError(
+          'forbidden',
+          403,
+          'This staging service is limited to approved testers.',
+        );
+    }
     const key = c.env.EMAIL_BLIND_INDEX_KEY as string;
     const index = await keyedHash(key, body.email);
     const deviceHash = await hash(body.deviceId);

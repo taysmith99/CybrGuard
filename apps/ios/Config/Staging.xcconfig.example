@@ -1,0 +1,6 @@
+// Copy these values to ignored Local.xcconfig for Debug iPhone/simulator testing.
+APP_DISPLAY_NAME = CybrGuard Staging
+APP_BUNDLE_IDENTIFIER = app.cybrguard
+API_BASE_URL = https:/$()/api.cybrguard.app
+API_ENVIRONMENT = staging
+// DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID

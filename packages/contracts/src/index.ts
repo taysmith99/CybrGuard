@@ -20,6 +20,7 @@ export const errorResponseSchema = z.strictObject({
       'invalid_request',
       'invalid_code',
       'unauthorised',
+      'forbidden',
       'rate_limited',
       'email_unavailable',
       'provider_unavailable',

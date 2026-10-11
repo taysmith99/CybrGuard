@@ -1,13 +1,14 @@
 import { type ErrorResponse, environmentSchema, healthResponseSchema } from '@cybrguard/contracts';
 import { Hono } from 'hono';
 import { APIError } from './lib/security';
-import type { EmailConfiguration } from './providers/email';
+import { type EmailConfiguration, requireEmailConfiguration } from './providers/email';
 import { registerRoutes } from './routes';
 
 export type Bindings = EmailConfiguration & {
   DB: D1Database;
   APP_ENV: string;
   DATA_MODE: string;
+  STAGING_ALLOWED_EMAILS?: string;
   XON_API_KEY?: string;
   DATA_ENCRYPTION_KEY?: string;
   EMAIL_BLIND_INDEX_KEY?: string;
@@ -46,15 +47,23 @@ app.use('*', async (c, next) => {
   ) {
     return c.json(error('configuration_error', 'Invalid service configuration.', requestId), 503);
   }
-  if (environment.data !== 'development' && environment.data !== 'test') {
+  if (environment.data === 'production') {
     return c.json(
-      error(
-        'scaffold_not_deployable',
-        'This development scaffold is not ready for deployment.',
-        requestId,
-      ),
+      error('scaffold_not_deployable', 'Production deployment is not enabled.', requestId),
       503,
     );
+  }
+  if (environment.data === 'staging') {
+    if (c.env.DATA_MODE !== 'live' || !c.env.STAGING_ALLOWED_EMAILS?.trim())
+      return c.json(
+        error('configuration_error', 'Staging configuration is incomplete.', requestId),
+        503,
+      );
+    requireEmailConfiguration(c.env);
+    const url = new URL(c.req.url);
+    if (url.protocol !== 'https:' || url.hostname !== 'api.cybrguard.app')
+      return c.json(error('configuration_error', 'Use the staging HTTPS origin.', requestId), 503);
+    c.header('Strict-Transport-Security', 'max-age=31536000');
   }
   await next();
 });
@@ -67,10 +76,7 @@ app.get('/v1/health', async (c) => {
     if ((version !== 1 && version !== 2) || (c.env.DATA_MODE === 'live' && version !== 2))
       throw new Error('Schema is not ready');
   } catch {
-    return c.json(
-      error('database_unavailable', 'Local database is not ready.', c.get('requestId')),
-      503,
-    );
+    return c.json(error('database_unavailable', 'Database is not ready.', c.get('requestId')), 503);
   }
 
   return c.json(
