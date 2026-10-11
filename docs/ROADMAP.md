@@ -1,17 +1,35 @@
 # Roadmap
 
-This repository preparation addresses M0 of [the product specification](../AGENTS.md). A health-check starter is not the specification's end-to-end MVP.
+## Implemented local vertical slice
 
-| Milestone | Intended result | Current state |
-| --- | --- | --- |
-| M0 — foundation | Reproducible API and iOS scaffolding, contracts, local migrations, dependency lockfile, CI and guides | Foundation supplied; follow local setup and Xcode prerequisites |
-| M1 — verified scan | Email ownership, secure sessions, consent, real XON adapter, D1 persistence and scan UI; clearly labelled local fixtures | Not implemented |
-| M2 — subscriptions | StoreKit/RevenueCat flow, authenticated billing events, reconciliation and server-enforced entitlements/quotas | Not implemented |
-| M3 — monitoring | Cron and Queue jobs, deduplication, retries and discreet APNs notifications | Not implemented |
-| M4 — release | Account deletion, operational procedures, privacy/terms, App Store disclosures, accessibility and security review | Not implemented |
+- Reproducible npm/XcodeGen setup and local D1 migrations.
+- Plain native iOS interface with `app.cybrguard` bundle identifier.
+- Real Cloudflare email adapter for `security@cybrguard.app`; inbox delivery and ownership verification confirmed in local simulator testing.
+- Six-digit codes displayed as `XXX-XXX`, expiring, hashed and single-use with throttling.
+- Encrypted verified address, consent record, hashed device-bound rotating sessions and iOS Keychain storage.
+- Paid XON adapter, real free breach count/timestamp, ownership checks, explicit provider errors, retry limits and preservation of prior results.
+- Logout and account deletion, including deletion/scan race protection.
+- Offline SQLite/network/security tests and explicit reserved-address live XON smoke tests.
 
-For M1, implement the smallest verified-email scan end to end before expanding the interface. Use provider documentation to define the adapter and parser; test empty results separately from errors. Fictional fixtures must be visibly labelled and impossible to select in production. M0 contains neither a fixture breach dataset nor a live provider integration.
+## Next integration checks
 
-Before M2 or M3, verify ownership, authorisation, session handling and scan failure behaviour. Before release, exercise the full definition of done in `AGENTS.md`; successful scaffolding checks alone do not satisfy it.
+Real mailbox delivery, verification, signed-in session persistence and the paid scan have passed end to end in the simulator, with a result screenshot captured. API checks (75 tests), Swift core tests (20 tests), signed simulator build and six reserved-address live provider checks passed.
 
-Hexproof and Squizz remain future architectural integration boundaries. There are no assumptions about their APIs or account models, and no integration code. Android, browser extensions, password managers, VPNs, AI chat and data broker removal are outside this MVP.
+1. Confirm complete XON storage/cache permissions and purchased quota/burst limits in the provider console.
+2. Provision an explicit HTTPS development/staging backend for physical iPhone testing; local serving is not an internet deployment.
+
+## M2 — subscriptions and premium details
+
+RevenueCat/StoreKit products, localised prices/trial terms, restore purchases, authenticated idempotent webhooks and entitlement reconciliation. Server-enforced quotas/downgrades, independently verified additional addresses, premium detail normalisation and reviewed/action-taken status. No premium details are exposed before billing exists.
+
+## M3 — monitoring and notifications
+
+Cron + Queues, configurable daily cadence, purchased-rate-limit-aware scheduling, deduplication and retries, initial historical baseline, and APNs consent/device revocation. Discreet alerts only for newly observed findings. These are not live today.
+
+## M4 — release readiness
+
+Isolated staging/production resources, abuse hardening, scheduled retention, encryption/key rotation and backups, email bounce/suppression operations, privacy/terms and App Store disclosures, security/accessibility review, signed device/TestFlight verification and release procedures.
+
+## Future integrations
+
+Hexproof alias management and Squizz browser-warning correlation need explicit contracts, opt-in and privacy boundaries before implementation. No VPN, generic AI assistant or browser extension is in the MVP.

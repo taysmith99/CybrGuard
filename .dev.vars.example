@@ -1,4 +1,11 @@
-# Copied by npm run dev:setup to apps/api/.dev.vars (ignored by Git).
-# This scaffold makes no provider requests and returns no breach data.
+# npm run dev:setup copies supported root .env secrets here without printing them.
+# This file is an example. apps/api/.dev.vars is private and ignored by Git.
 APP_ENV=development
 DATA_MODE=unconfigured
+EMAIL_TRANSPORT=disabled
+EMAIL_FROM=security@cybrguard.app
+# XON_API_KEY=
+# CLOUDFLARE_ACCOUNT_ID=
+# CLOUDFLARE_EMAIL_API_TOKEN=
+# DATA_ENCRYPTION_KEY= # 32 random bytes in hex; generated once by dev:setup
+# EMAIL_BLIND_INDEX_KEY= # generated once by dev:setup

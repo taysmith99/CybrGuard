@@ -1,81 +1,573 @@
-openapi: 3.1.0
-info:
-  title: CybrGuard Development API
-  version: 0.0.0
-  description: M0 local development scaffold. Only health is implemented; no breach data or provider integration.
-servers:
-  - url: http://localhost:8788
-    description: Local development only
-paths:
-  /v1/health:
-    get:
-      operationId: getHealth
-      summary: Verify the development service and local D1 migration
-      responses:
-        '200':
-          description: Development service and database are ready; external integrations are unconfigured.
-          headers:
-            X-Request-ID:
-              $ref: '#/components/headers/RequestId'
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthResponse'
-        '503':
-          description: Invalid configuration, staging/production environment, or unavailable/unmigrated local database.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected internal error, with no sensitive details.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-components:
-  headers:
-    RequestId:
-      description: Server-generated identifier for this request.
-      schema:
-        type: string
-        format: uuid
-    NoStore:
-      schema:
-        type: string
-        const: no-store
-  schemas:
-    HealthResponse:
-      type: object
-      additionalProperties: false
-      required: [status, service, environment, dataMode]
-      properties:
-        status:
-          const: ok
-        service:
-          const: cybrguard-api
-        environment:
-          type: string
-          enum: [development, test, staging, production]
-        dataMode:
-          const: unconfigured
-    ErrorResponse:
-      type: object
-      additionalProperties: false
-      required: [error]
-      properties:
-        error:
-          type: object
-          additionalProperties: false
-          required: [code, message, requestId]
-          properties:
-            code:
-              type: string
-              enum: [not_found, configuration_error, scaffold_not_deployable, database_unavailable, internal_error]
-            message:
-              type: string
-            requestId:
-              type: string
-              format: uuid
+"openapi": "3.1.0"
+"info":
+  "title": "CybrGuard Local Development API"
+  "version": "0.1.0"
+  "description": "Real Cloudflare email verification and paid XON manual counts. Local-only; staging/production blocked. Premium features unavailable."
+"servers": [{"url": "http://localhost:8788", "description": "Local development"}]
+"paths":
+  "/v1/health":
+    "get":
+      "summary": "Check local API and migrated database"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/HealthResponse"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+  "/v1/auth/start":
+    "post":
+      "summary": "Send a real one-time verification email"
+      "responses":
+        "202":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/VerificationChallenge"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AuthStart"
+  "/v1/auth/verify":
+    "post":
+      "summary": "Consume a code and issue device-bound credentials"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/SessionCredentials"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AuthVerify"
+  "/v1/auth/refresh":
+    "post":
+      "summary": "Rotate credentials; refresh reuse revokes the family"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/SessionCredentials"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AuthRefresh"
+  "/v1/auth/logout":
+    "post":
+      "summary": "Revoke current session family"
+      "responses":
+        "204":
+          "description": "Success with no response body"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+  "/v1/me":
+    "get":
+      "summary": "Read authenticated free account"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Account"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+    "delete":
+      "summary": "Delete stored account data and revoke credentials"
+      "responses":
+        "204":
+          "description": "Success with no response body"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+  "/v1/addresses":
+    "get":
+      "summary": "List the single verified free address"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/AddressList"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+  "/v1/addresses/{id}/summary":
+    "get":
+      "summary": "Read owned address scan count"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/AddressSummary"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "404":
+          "description": "Address is not owned by this account"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  "/v1/addresses/{id}/scan":
+    "post":
+      "summary": "Query paid XON for the owned verified address"
+      "responses":
+        "200":
+          "description": "Success"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/AddressSummary"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "404":
+          "description": "Address is not owned by this account"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "502":
+          "description": "Unsupported provider response; prior result preserved"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  "/v1/addresses/{id}/findings":
+    "get":
+      "summary": "Premium details are unavailable until billing is connected"
+      "responses":
+        "403":
+          "description": "Server-confirmed subscription required; no details exposed"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "404":
+          "description": "Address is not owned by this account"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "400":
+          "description": "Invalid request or code"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required or session expired"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "429":
+          "description": "Rate limited; Retry-After contains seconds"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Configuration, email or provider unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+"components":
+  "securitySchemes":
+    "bearerAuth":
+      "type": "http"
+      "scheme": "bearer"
+    "deviceId":
+      "type": "apiKey"
+      "in": "header"
+      "name": "X-Device-ID"
+  "schemas":
+    "HealthResponse":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["status", "service", "environment", "dataMode"]
+      "properties":
+        "status":
+          "const": "ok"
+        "service":
+          "const": "cybrguard-api"
+        "environment":
+          "enum": ["development", "test", "staging", "production"]
+        "dataMode":
+          "enum": ["unconfigured", "live"]
+    "ErrorResponse":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["error"]
+      "properties":
+        "error":
+          "type": "object"
+          "additionalProperties": false
+          "required": ["code", "message", "requestId"]
+          "properties":
+            "code":
+              "type": "string"
+            "message":
+              "type": "string"
+            "requestId":
+              "type": "string"
+              "format": "uuid"
+    "AuthStart":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["email", "consent", "deviceId"]
+      "properties":
+        "email":
+          "type": "string"
+          "format": "email"
+          "maxLength": 254
+        "consent":
+          "const": true
+        "deviceId":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+    "AuthVerify":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["challengeId", "code", "deviceId"]
+      "properties":
+        "challengeId":
+          "type": "string"
+          "format": "uuid"
+        "code":
+          "type": "string"
+          "pattern": "^[0-9]{3}-?[0-9]{3}$"
+        "deviceId":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+    "AuthRefresh":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["refreshToken", "deviceId"]
+      "properties":
+        "refreshToken":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+        "deviceId":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+    "VerificationChallenge":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["challengeId", "expiresIn", "message"]
+      "properties":
+        "challengeId":
+          "type": "string"
+          "format": "uuid"
+        "expiresIn":
+          "const": 600
+        "message":
+          "type": "string"
+    "SessionCredentials":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["accessToken", "refreshToken", "expiresAt"]
+      "properties":
+        "accessToken":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+        "refreshToken":
+          "type": "string"
+          "pattern": "^[a-f0-9]{64}$"
+        "expiresAt":
+          "type": "integer"
+          "description": "Unix seconds; 15-minute access token"
+    "AddressSummary":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["id", "email", "verified", "knownBreachCount", "checkedAt"]
+      "properties":
+        "id":
+          "type": "string"
+          "format": "uuid"
+        "email":
+          "type": "string"
+          "format": "email"
+          "maxLength": 254
+        "verified":
+          "const": true
+        "knownBreachCount":
+          "type": ["integer", "null"]
+          "minimum": 0
+        "checkedAt":
+          "type": ["string", "null"]
+          "format": "date-time"
+    "AddressList":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["addresses"]
+      "properties":
+        "addresses":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/AddressSummary"
+          "maxItems": 1
+    "Account":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["userId", "tier", "quota", "address"]
+      "properties":
+        "userId":
+          "type": "string"
+          "format": "uuid"
+        "tier":
+          "const": "free"
+        "quota":
+          "const": 1
+        "address":
+          "$ref": "#/components/schemas/AddressSummary"

@@ -1,6 +1,6 @@
 # CybrGuard XON API tests
 
-The local smoke suite validates the provider connection independently of the M0 app. A successful test does not enable an app scan, verify user ownership, or implement subscriptions and monitoring.
+The local smoke suite validates the provider connection independently of app authentication. A successful test validates the key/contract but does not prove ownership of a personal mailbox. App scans additionally require real Cloudflare email verification. Subscriptions and monitoring are not implemented.
 
 ## Run the live checks
 

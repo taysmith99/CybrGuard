@@ -1,55 +1,54 @@
 # Development and operations
 
-## Local foundation
+## Local setup and secrets
 
-Run the commands in the [README](../README.md#local-api-setup) from the repository root. The API uses local Wrangler execution and local D1 migration commands. Cloudflare documents how [local Workers execution and simulated bindings](https://developers.cloudflare.com/workers/local-development/) work.
+Run the root README commands. The Worker uses a local D1 database and is bound to `127.0.0.1:8788`. `db:migrate:local` always selects `--local`. No remote database or public API route has been provisioned.
 
-Keep the dev server running while using the simulator. If the port is occupied, stop the existing process or change the API port and the iOS base URL together. A connection error is expected when the API is stopped. Do not interpret it as a breach result.
+`npm run dev:setup` reads the ignored root `.env` without executing it. Supported variables: `XON_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_EMAIL_TOKEN` (mapped to Worker secret `CLOUDFLARE_EMAIL_API_TOKEN`), `CLOUDFLARE_EMAIL_API_TOKEN`, and `EMAIL_FROM`. It copies only supported values to ignored `apps/api/.dev.vars`, preserves/generates encryption/HMAC keys and sets mode `live` if an XON key is present. Configuration is written with mode 0600 and values are never printed. Restart Wrangler after re-running setup. Do not delete/rotate generated keys without a data migration; existing protected emails would become unreadable or unfindable.
 
-An HTTP 503 health response with `database_unavailable` can mean that the database has not been migrated. Run `npm run db:migrate:local` and try again. The `DB` binding points to the local `cybrguard-local` database. Its migration creates only a `schema_metadata` bootstrap table; it does not create product accounts or findings.
+The latest migration creates users, encrypted monitored email/consent records, hashed single-use verification challenges, hashed device-bound session credentials, shared rate limits and count/timestamp storage. It does not create premium finding metadata or billing/job/device tables.
 
-`APP_ENV` must be `development` or `test` to run this starter, and `DATA_MODE` must be `unconfigured`. Invalid values return `configuration_error`; `staging` and `production` return `scaffold_not_deployable`. These guards make incomplete product functionality explicit.
+## Cloudflare Email Service
 
-Use the repository's locked Wrangler version. The [D1 command reference](https://developers.cloudflare.com/d1/wrangler-commands/) explains local and remote migration options; the repository's development command selects local explicitly. Do not use `--remote` for routine local development.
+The selected domain is **cybrguard.app** and sender is **security@cybrguard.app**. The selected provider is Cloudflare Email Service, not Resend.
 
-The root package overrides Miniflare's `sharp` dependency to 0.35.5 to address [GHSA-wq5f-xc86-pv6w](https://github.com/lovell/sharp/security/advisories/GHSA-wq5f-xc86-pv6w) while retaining the tested Wrangler version. Remove the override when a future age-eligible Wrangler update includes the fix, after checking the lockfile, dependency audit and local startup again.
+1. Activate the domain in the correct Cloudflare account.
+2. Enable outbound **Email Sending**, confirm account eligibility and add the DNS/DKIM/SPF records supplied by Cloudflare. Email Routing does not by itself enable unrestricted transactional sends.
+3. Create an account token with email sending permission and any required recipient/sending-domain scope. Store it as `CLOUDFLARE_EMAIL_TOKEN` in root `.env` together with `CLOUDFLARE_ACCOUNT_ID`.
+4. Run `npm run dev:setup` and restart `npm run dev:api`.
+5. Request a verification code from the app, check the real inbox/junk folder and enter the code. A Cloudflare acceptance/queued response is not proof of inbox delivery; complete this check end to end.
 
-## Environment matrix
+Local mode uses the documented REST API, `POST https://api.cloudflare.com/client/v4/accounts/{account_id}/email/sending/send`, with a bearer token. The API acknowledges recipient delivery/queue acceptance before a challenge is returned. Failures invalidate the challenge and return a sanitised error, with no raw Cloudflare messages or recipient data in logs.
 
-| Concern | Development | Staging | Production |
-| --- | --- | --- | --- |
-| Worker | Local dev server | Not provisioned | Not provisioned |
-| D1 | Local migration foundation | Separate database required | Separate database required |
-| Health data mode | `unconfigured` | No integration configured | No integration configured |
-| Secret storage | Ignored local variables | Cloudflare secrets required | Cloudflare secrets required |
-| XON / email / billing / APNs | Not implemented | Adapters and sandbox verification required | Live integrations and review required |
-| Queues / Cron | Not implemented | Dedicated bindings required | Dedicated bindings required |
-| iOS | Simulator health check | HTTPS URL and signing required | Release configuration required |
+The adapter also supports a structured `EMAIL.send()` Worker binding when `EMAIL_TRANSPORT=cloudflare-binding`. This is for a real deployed binding or an explicitly configured `remote: true` email binding. Never select that mode with Wrangler's simulated local email binding: the simulator logs/saves message content and does not prove mailbox ownership. No such binding is configured by default, and there is no local inbox/OTP bypass.
 
-An environment name in a schema is not a provisioned environment. Keep test, staging and production resources and credentials separate. Local examples must contain no real secrets. Additional credentials in an example file do not activate an integration.
+Official references: [Email REST API](https://developers.cloudflare.com/email-service/api/send-emails/rest-api/), [Worker binding](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/), [remote email development](https://developers.cloudflare.com/email-service/local-development/sending/).
 
-## Deployment gate
+## XON and rate limits
 
-`npm run build:api` is a packaging check, not a deployment. The starter is not ready to receive real accounts or personal information. The Worker configuration disables its `workers.dev` route and contains no public routes or deployment scripts; the runtime also rejects staging and production operation. No deployment, remote migration, queue creation, sender verification or App Store release has been performed by repository setup.
+The API calls only the fixed HTTPS origin `plus-api.xposedornot.com`, with the server-side key and `detailed=false`. It validates success/envelope/address/unique breach IDs and retains only the count and last successful timestamp. Redirects, timeouts, bad payloads, auth failures, 404s and rate limits are never treated as clean results. No raw breach payload is logged or stored. The development command disables Wrangler local explorer and local observability, and Wrangler configuration disables trace collection, because outbound XON URLs contain an email address. Preserve these safeguards when changing tooling; before enabling telemetry, verify upstream paths and credentials are redacted.
 
-Before adding a deployment command:
+The global gate permits at most one request per 1.5 seconds and respects `detail.retry_after` from 429 responses. Each verified address may attempt one scan/minute. Confirm the purchased quota/burst rate before multi-user deployment; these conservative development defaults are not a statement of the vendor's contract. Automatic monitoring/queue retries are not implemented.
 
-1. Implement and test the relevant product milestone, including authorisation and failure behaviour.
-2. Create explicit staging and production Wrangler environments with real resource bindings, and review the migration against a staging database.
-3. Provision server secrets through Cloudflare secret management. Never put them in Wrangler configuration, the iOS target or CI output.
-4. Add deployment and rollback instructions using the final environment names. Document backup/restore expectations, retention and incident contacts.
-5. Validate the iOS release URL, signing, privacy disclosures and end-to-end staging flows.
+Official [OpenAPI](https://plus-api.xposedornot.com/openapi.json) and [quickstart](https://plus.xposedornot.com/blog/xonapi-quickstart) were checked during implementation. The served OpenAPI still references missing response components, so parsing uses the documented simple response and the reserved-address smoke suite. Complete caching/storage terms, purchased rate limits and webhook availability require confirmation in the vendor console. Detailed metadata is intentionally not collected here; the only retained scan data is count/timestamp. Consumer licensing remains the owner's documented assumption.
 
-## External setup to complete during implementation
+## Sessions, retention and deletion
 
-| Integration | Manual work required |
-| --- | --- |
-| Cloudflare | Choose the account; provision separate D1 databases and later monitoring queues; configure Cron only after idempotent consumers exist. Store real binding IDs in reviewed environment configuration. |
-| xonAPI+ | Obtain the paid key; confirm allowed consumer use, storage/caching terms, current schema and purchased request limits in the provider console; implement defensive parsing and rate-limit handling before making queries. |
-| Email | Confirm outbound sending eligibility; verify a controlled sender domain and its required SPF/DKIM records; implement and test delivery, bounce and throttling handling. If unavailable, configure a documented fallback behind the email interface. |
-| RevenueCat / Apple | Follow the billing guide; create products and sandbox testers, connect App Store Connect, configure entitlements, and register an authenticated webhook only after its handler exists. |
-| APNs | Create a server-side signing key, record its key ID and Apple team ID, choose the final bundle ID, configure the app capability, and distinguish sandbox from production tokens. Test consent, revocation and delivery on supported devices. |
+Email encryption uses AES-256-GCM with a fresh IV. Lookups and OTP hashes use a separate HMAC key. Access/refresh/device tokens are SHA-256 hashed in D1. Access expires in 15 minutes; refresh rotates and has a fixed 30-day family expiry. Reuse revokes the family. The app stores credentials in non-synchronising, device-only Keychain storage scoped to origin/environment. Simulator app builds must use normal local ad-hoc signing; explicitly unsigned simulator apps cannot access Keychain.
 
-[Cloudflare Email Service](https://developers.cloudflare.com/email-service/) distinguishes outbound sending from incoming Email Routing; configuring routing alone is not a complete verification-mail system. Consult [Apple's token-based APNs guide](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns) when implementing push delivery.
+Verification challenges expire after 10 minutes. Sign-in requests lazily remove challenges more than an hour past expiry, sessions more than a day past family expiry, and abuse counters older than 24 hours. This is development cleanup, not a production scheduled retention system. Account deletion immediately deletes challenges for the email, then the account and cascading email/count/sessions. Shared pseudonymous abuse counters may remain for up to 24 hours. It does not remove upstream historical breach records or Cloudflare mail-delivery records.
 
-Provider details are deliberately not implemented from marketing examples. The [xonAPI+ product page](https://plus.xposedornot.com/products/api) is a starting point for obtaining current documentation, not a complete response schema or licence grant.
+## Environment and deployment gate
+
+| Concern | Development | Staging/production |
+| --- | --- | --- |
+| Worker/API | Local loopback | Runtime blocked; not provisioned |
+| D1 | Local migrations | Separate databases required |
+| Secrets | Ignored `.dev.vars` | Cloudflare secrets and rotation plan required |
+| Email | Real Cloudflare REST when configured | Sender/account readiness and delivery verification required |
+| XON | Real paid API after verification | Contract/rate/privacy review required |
+| Billing/monitoring/APNs | Not implemented | Required before advertising these features |
+
+`npm run build:api` is a dry run only. Wrangler disables public `workers.dev`/preview routes and no deployment command has been added. A physical iPhone needs a trusted HTTPS development/staging endpoint; changing to a LAN HTTP origin is intentionally rejected by the app. Do not claim an iPhone backend or live production service exists until it has been explicitly provisioned and verified.
+
+Before enabling deployment: establish separate environments, correct bindings/backups, production rate/perimeter controls, scheduled retention and key rotation, consent/legal notices, email delivery handling, monitoring/observability and operational incident procedures. Later App Store/RevenueCat/APNs setup is described in the roadmap/billing guide.

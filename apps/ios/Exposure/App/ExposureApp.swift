@@ -5,8 +5,8 @@ import SwiftUI
 struct ExposureApp: App {
     var body: some Scene {
         WindowGroup {
-            DevelopmentStatusView(
-                brandName: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Exposure",
+            MVPView(
+                brandName: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "CybrGuard",
                 configuration: loadConfiguration()
             )
         }

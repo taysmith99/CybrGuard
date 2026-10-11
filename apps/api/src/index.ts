@@ -1,10 +1,16 @@
 import { type ErrorResponse, environmentSchema, healthResponseSchema } from '@cybrguard/contracts';
 import { Hono } from 'hono';
+import { APIError } from './lib/security';
+import type { EmailConfiguration } from './providers/email';
+import { registerRoutes } from './routes';
 
-export type Bindings = {
+export type Bindings = EmailConfiguration & {
   DB: D1Database;
   APP_ENV: string;
   DATA_MODE: string;
+  XON_API_KEY?: string;
+  DATA_ENCRYPTION_KEY?: string;
+  EMAIL_BLIND_INDEX_KEY?: string;
 };
 
 type WorkerEnvironment = {
@@ -30,7 +36,14 @@ app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
 
   const environment = environmentSchema.safeParse(c.env.APP_ENV);
-  if (!environment.success || c.env.DATA_MODE !== 'unconfigured') {
+  if (
+    !environment.success ||
+    !['unconfigured', 'live'].includes(c.env.DATA_MODE) ||
+    (c.env.DATA_MODE === 'live' &&
+      (!/^[a-f0-9]{64}$/i.test(c.env.DATA_ENCRYPTION_KEY ?? '') ||
+        (c.env.EMAIL_BLIND_INDEX_KEY?.length ?? 0) < 32 ||
+        !c.env.XON_API_KEY))
+  ) {
     return c.json(error('configuration_error', 'Invalid service configuration.', requestId), 503);
   }
   if (environment.data !== 'development' && environment.data !== 'test') {
@@ -51,7 +64,8 @@ app.get('/v1/health', async (c) => {
     const version = await c.env.DB.prepare(
       'SELECT version FROM schema_metadata WHERE id = 1',
     ).first<number>('version');
-    if (version !== 1) throw new Error('Schema is not ready');
+    if ((version !== 1 && version !== 2) || (c.env.DATA_MODE === 'live' && version !== 2))
+      throw new Error('Schema is not ready');
   } catch {
     return c.json(
       error('database_unavailable', 'Local database is not ready.', c.get('requestId')),
@@ -64,14 +78,23 @@ app.get('/v1/health', async (c) => {
       status: 'ok',
       service: 'cybrguard-api',
       environment: c.env.APP_ENV,
-      dataMode: 'unconfigured',
+      dataMode: c.env.DATA_MODE,
     }),
   );
 });
 
+registerRoutes(app);
+
 app.notFound((c) => c.json(error('not_found', 'Endpoint not found.', c.get('requestId')), 404));
 
-app.onError((_cause, c) => {
+app.onError((cause, c) => {
+  if (cause instanceof APIError) {
+    if (cause.retryAfter) c.header('Retry-After', String(cause.retryAfter));
+    return c.json(
+      { error: { code: cause.code, message: cause.message, requestId: c.get('requestId') } },
+      cause.status,
+    );
+  }
   // Deliberately do not log request paths, credentials or exception payloads.
   console.error(JSON.stringify({ event: 'request_failed', requestId: c.get('requestId') }));
   return c.json(

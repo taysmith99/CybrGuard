@@ -71,7 +71,7 @@ describe('development API boundaries', () => {
 
   it('does not expose unimplemented business routes or reflect a supplied request ID', async () => {
     const response = await app.request(
-      '/v1/me?email=sensitive',
+      '/v1/not-implemented?email=sensitive',
       {
         headers: { 'X-Request-ID': 'attacker-controlled' },
       },

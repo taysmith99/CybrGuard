@@ -1,78 +1,57 @@
-# CybrGuard iOS development starter
+# CybrGuard iOS development
 
-This is the M0 SwiftUI shell for **CybrGuard**. It checks the real `/v1/health` endpoint and clearly states that breach intelligence is unconfigured. Verification, scanning, purchases and push notifications are future milestones.
+Plain SwiftUI interface with real backend email verification, Keychain-backed sign-in and paid XON manual breach counts. Purchases, premium details, additional addresses, continuous monitoring and APNs are not connected yet.
 
-The existing Xcode project, scheme, source directories and default display-name configuration still use `Exposure`. Build commands below use those current identifiers. To show the CybrGuard name in a local build, set `APP_DISPLAY_NAME = CybrGuard` in the local override described below.
+The display name is **CybrGuard**, bundle identifier **app.cybrguard**, and technical project/scheme name **Exposure**. Register the identifier under your Apple team before signed device builds. Minimum deployment target is iOS 17; Swift 6 and full Xcode are required for the application.
 
-## Tools and setup
+## Simulator
 
-- Full Xcode 16 or newer, including an iOS Simulator runtime, and Swift 6. Use the current stable Xcode for active development. Command Line Tools alone can run the core tests but cannot build or run the iOS app.
-- Minimum deployment target: iOS 17.0. This provides a modern SwiftUI baseline while supporting older devices. This minimum is independent of the SDK version shipped with Xcode.
-- XcodeGen 2.46.0 or newer (the current release verified during setup). The project is generated from the tracked specification; no third-party app packages are required.
-
-From the repository root:
+Install XcodeGen 2.46.0 or later, then from the repository root:
 
 ```sh
-brew install xcodegen
-cd apps/ios
-xcodegen generate
-open Exposure.xcodeproj
+npm run ios:generate
+open -a Xcode apps/ios/Exposure.xcodeproj
 ```
 
-Select the **Exposure** scheme and an installed iPhone simulator, then run. Start the API using the root README and tap **Check connection**. A successful check confirms that the starter API is reachable; it does not verify provider readiness or scan an email address.
+Select Exposure and an iPhone simulator, then press ⌘R. Xcode 27 displays simulators in Device Hub. Keep `npm run dev:api` running on the Mac. Start with the root README to configure server-only secrets, email sending and local D1 migrations.
 
-Optional local overrides:
+In the app: Get started / Sign in → email and provider consent → Send verification code → enter the six-digit (XXX-XXX) inbox code → Scan verified email. The code expires after 10 minutes and permits five attempts. No code is returned by the API, logged or exposed via a development bypass. Cloudflare sending must be configured to proceed. A successful scan displays a real breach count and timestamp; provider errors preserve the previous result. Settings includes sign-out, account deletion and API health checks.
+
+## Physical iPhone
+
+Connect and trust the phone, enable Developer Mode, sign in to an Apple account in Xcode Settings, and select your team under Signing & Capabilities with automatic signing. Select your connected iPhone and run.
+
+The interface can launch on a physical device, but account/scan requests require a reachable HTTPS backend. `localhost` on the phone refers to the phone, not the Mac. A staging/development endpoint has not yet been provisioned. The app intentionally refuses plain HTTP LAN origins.
+
+Optional ignored Debug overrides:
 
 ```sh
-cp Config/Local.xcconfig.example Config/Local.xcconfig
+cp apps/ios/Config/Local.xcconfig.example apps/ios/Config/Local.xcconfig
 ```
 
-The defaults are `development` and `http://localhost:8788`. `localhost` reaches the Mac from its iOS Simulator. A physical iPhone needs a trusted HTTPS development/staging endpoint, the matching `API_ENVIRONMENT`, a real bundle identifier and your signing team. The app deliberately refuses plain HTTP to LAN addresses.
+Set `API_BASE_URL`, the matching `API_ENVIRONMENT` and `DEVELOPMENT_TEAM` there. Preserve the `https:/$()/` xcconfig spelling because literal `//` begins a comment. Do not put server-side API keys in app configuration. The runtime currently rejects staging/production server operation; provisioning/release hardening must precede enabling those environments.
 
-Set `APP_DISPLAY_NAME` to change branding and `APP_BUNDLE_IDENTIFIER` to change the identifier. Keep the `:/$()/` URL spelling in xcconfig files: a literal `//` begins a comment. Local override files are ignored by Git. Client configuration must never contain server secrets.
+## Checks
 
-## Test and build
-
-Run core contract, failure and environment checks without full Xcode:
+If global Xcode selection still points at Command Line Tools, use an explicit developer directory:
 
 ```sh
-swift test --package-path apps/ios
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer npm run test:ios:core
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project apps/ios/Exposure.xcodeproj -scheme Exposure -configuration Debug \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath apps/ios/DerivedData build
 ```
 
-With full Xcode selected, generate the project and build for the simulator without signing:
+Simulator builds must use normal local ad-hoc signing: do not pass `CODE_SIGNING_ALLOWED=NO` when running the app, because unsigned simulator builds cannot access Keychain. A paid developer account is not required for simulator signing.
 
-```sh
-cd apps/ios
-xcodegen generate
-xcodebuild -project Exposure.xcodeproj -scheme Exposure \
-  -configuration Debug -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
-xcrun simctl list devices available
-```
+Core tests cover environment configuration, health contracts, verification request privacy, explicit server/rate-limit errors, response origin and content type, and unscanned versus zero-count results. These tests do not validate actual mail delivery or replace a signed device run.
 
-Use an available iPhone simulator ID from the last command:
+## Safeguards
 
-```sh
-xcodebuild -project Exposure.xcodeproj -scheme Exposure \
-  -destination 'platform=iOS Simulator,id=SIMULATOR_UUID' \
-  -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO test
-```
-
-The CI workflow runs core tests, generates the project, builds Debug and Release, and runs the same core tests on an available iPhone simulator. It needs a macOS runner with full Xcode and simulator runtimes; Linux runners cannot build this app. These unsigned simulator builds do not validate distribution signing, App Store assets or device-only integrations.
-
-## Environment safeguards
-
-- HTTPS is required except for `http://localhost` in a Debug build configured for `development` or `test`.
-- The local ATS exception is present only in the Debug Info.plist. Release has no ATS exceptions.
-- HTTP redirects are refused. The health response must come from the requested URL, match the configured environment and declare the expected service and `unconfigured` data mode.
-- Networking uses an ephemeral session without a persistent cache or cookies. No email addresses or credentials are collected by this starter.
-- Release API configuration is blank by default and shows a configuration error. Copy `Config/Production.xcconfig.example` to `Config/Production.xcconfig`, replace the reserved placeholder URL with a real HTTPS deployment, set the bundle ID and signing team, and verify the deployment before preparing a release. This is a starter, not an App Store submission.
-
-## References checked
-
-- [Apple URLSession asynchronous requests](https://developer.apple.com/documentation/foundation/urlsession/data(for:delegate:))
-- [Apple local networking and App Transport Security](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking)
-- [Apple SwiftUI navigation](https://developer.apple.com/documentation/swiftui/understanding-the-navigation-stack)
-- [XcodeGen project specification](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md)
-
-The initial local environment contained Swift 6.4 Command Line Tools but no full Xcode or simulator. See the task report for which checks actually ran; project generation or passing core tests does not imply a simulator launch has been verified.
+- HTTPS required except localhost HTTP in development/test Debug builds. Release has no local ATS exception and requires explicit production configuration.
+- Requests refuse redirects and use an ephemeral session without persistent cookies/cache. Errors and request payloads are never printed by app networking.
+- Session and random device credentials use device-only Keychain storage scoped to backend origin/environment. Email/OTP entry is not stored in UserDefaults. Codes are held only in form memory.
+- The server, not the client, resolves ownership, free quota and provider access. There is no client flag unlocking premium details.
+- Production privacy notices, StoreKit disclosures, retention/rotation and signing still require release work.

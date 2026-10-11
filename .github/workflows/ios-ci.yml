@@ -34,7 +34,7 @@ jobs:
           for configuration in Debug Release; do
             xcodebuild -project Exposure.xcodeproj -scheme Exposure \
               -configuration "$configuration" -destination 'generic/platform=iOS Simulator' \
-              -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
+              -derivedDataPath DerivedData build
           done
       - name: Select an installed iPhone simulator
         run: |
@@ -55,4 +55,4 @@ jobs:
         run: |
           xcodebuild -project Exposure.xcodeproj -scheme Exposure \
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
-            -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO test
+            -derivedDataPath DerivedData test

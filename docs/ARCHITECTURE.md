@@ -1,44 +1,19 @@
 # Architecture
 
-## Implemented foundation
-
-The repository is an npm workspace for a TypeScript API and shared contracts, alongside a native SwiftUI application. The only user-visible interaction is an API health check. D1 has a local migration foundation; no account or breach domain model is implemented.
-
 ```mermaid
-flowchart LR
-  subgraph device[Client boundary]
-    iOS[SwiftUI health screen]
-  end
-  subgraph local[Local development boundary]
-    API[Hono Worker: GET /v1/health]
-    D1[(Local D1 migration foundation)]
-  end
-  iOS -->|HTTP on loopback for local development| API
-  API -. configured binding .-> D1
+flowchart TD
+    App[SwiftUI iOS app] -->|Email + consent / one-time code| API[Cloudflare Worker API]
+    App -->|Device-bound bearer session| API
+    App --> KC[Device-only Keychain]
+    API --> DB[Local D1: encrypted email, consent, hashed challenges/sessions, scan count]
+    API -->|Real verification email| Mail[Cloudflare Email Service]
+    API -->|Verified address + server key only| XON[Paid xonAPI+]
 ```
 
-The health endpoint reports service configuration and checks the local D1 `schema_metadata` bootstrap table. It returns an unavailable response if local migrations have not been applied. It does not query breach providers, validate entitlements or exercise notification delivery.
+The app has Scan, Addresses, Monitoring and Settings tabs. Authentication and real manual counts are connected. Billing, premium details, monitoring and APNs remain unavailable.
 
-## Intended product architecture — not implemented
+Trust boundaries: the native app supplies email/consent before verification but cannot choose a lookup address after login. A one-time code is sent to the real mailbox and consumed server-side before creating/reusing an account. Every account/address route resolves a user from hashed session and device credentials and checks resource ownership. There is no arbitrary-email scan endpoint or local OTP bypass. Provider failures preserve prior successful counts. Free responses expose only the count, not provider breach details.
 
-```mermaid
-flowchart LR
-  iOS[SwiftUI application] -->|HTTPS and authenticated sessions| API[Cloudflare Worker]
-  API --> DB[(D1: minimal protected account data)]
-  API -->|Verified addresses only| XON[xonAPI+]
-  API --> Email[Outbound email provider]
-  API --> RC[RevenueCat]
-  RC -->|Authenticated events| API
-  Cron[Cron] --> Queue[Queue]
-  Queue --> Jobs[Monitoring consumer]
-  Jobs --> DB
-  Jobs --> XON
-  Jobs --> APNs[APNs]
-  APNs -->|Discreet notification| iOS
-```
+Email uses Cloudflare's outbound REST API locally; the adapter can also use its real Workers sending binding. No provider tokens belong in iOS. XON gets a verified address only after consent; the app communicates with the Worker rather than the provider. The backend stores email encrypted with AES-GCM and a separate HMAC lookup value. Detailed metadata is intentionally not fetched in this free slice.
 
-Treat the device, backend, database and each third-party service as separate trust boundaries. The backend must establish identity and ownership before each account-scoped operation; it must also enforce entitlements and quotas independently of the client. Provider keys, email tokens, encryption keys, RevenueCat server keys and APNs signing keys belong only on the server.
-
-Implement identity and a verified scan before billing or monitoring. Keep provider interfaces small and replaceable. Validate external payloads before normalising minimal findings; never infer zero breaches from an upstream error. Introduce database tables with the feature that needs them rather than treating the full specification as an existing schema.
-
-Future Hexproof and Squizz integration boundaries are recorded in the roadmap only. No shared identity, browsing telemetry or integrations runtime exists.
+The current Worker is local-only and rejects staging/production. D1 and the scan rate gate work for manual scans; there is no queue/cron worker yet. Deployable environment provisioning, provider quota/caching review, billing/monitoring/APNs, scheduled cleanup, retention and key rotation remain release gates. Hexproof/Squizz integration remains future work, with no runtime integration implemented.

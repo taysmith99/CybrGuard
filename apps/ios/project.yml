@@ -44,7 +44,7 @@ targets:
       - package: ExposureCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.cybrguard.tests
+        PRODUCT_BUNDLE_IDENTIFIER: app.cybrguard.tests
         GENERATE_INFOPLIST_FILE: YES
 schemes:
   Exposure:

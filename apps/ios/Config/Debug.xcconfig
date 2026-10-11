@@ -1,5 +1,5 @@
-APP_DISPLAY_NAME = Exposure
-APP_BUNDLE_IDENTIFIER = com.example.cybrguard.development
+APP_DISPLAY_NAME = CybrGuard
+APP_BUNDLE_IDENTIFIER = app.cybrguard
 API_BASE_URL = http:/$()/localhost:8788
 API_ENVIRONMENT = development
 #include? "Local.xcconfig"

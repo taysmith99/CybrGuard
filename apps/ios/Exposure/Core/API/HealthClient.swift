@@ -3,7 +3,7 @@ import Foundation
 public struct HealthResponse: Decodable, Sendable, Equatable {
     public enum Status: String, Decodable, Sendable { case ok }
     public enum Service: String, Decodable, Sendable { case api = "cybrguard-api" }
-    public enum DataMode: String, Decodable, Sendable { case unconfigured }
+    public enum DataMode: String, Decodable, Sendable { case unconfigured, live }
 
     public let status: Status
     public let service: Service
