@@ -1,0 +1,6 @@
+// Copy to Production.xcconfig (gitignored) after configuring the real backend.
+APP_DISPLAY_NAME = Exposure
+APP_BUNDLE_IDENTIFIER = com.example.cybrguard
+API_BASE_URL = https:/$()/api.example.invalid
+API_ENVIRONMENT = production
+// DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID

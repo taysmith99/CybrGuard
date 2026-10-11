@@ -1,0 +1,81 @@
+openapi: 3.1.0
+info:
+  title: CybrGuard Development API
+  version: 0.0.0
+  description: M0 local development scaffold. Only health is implemented; no breach data or provider integration.
+servers:
+  - url: http://localhost:8788
+    description: Local development only
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      summary: Verify the development service and local D1 migration
+      responses:
+        '200':
+          description: Development service and database are ready; external integrations are unconfigured.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Invalid configuration, staging/production environment, or unavailable/unmigrated local database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected internal error, with no sensitive details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  headers:
+    RequestId:
+      description: Server-generated identifier for this request.
+      schema:
+        type: string
+        format: uuid
+    NoStore:
+      schema:
+        type: string
+        const: no-store
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, environment, dataMode]
+      properties:
+        status:
+          const: ok
+        service:
+          const: cybrguard-api
+        environment:
+          type: string
+          enum: [development, test, staging, production]
+        dataMode:
+          const: unconfigured
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum: [not_found, configuration_error, scaffold_not_deployable, database_unavailable, internal_error]
+            message:
+              type: string
+            requestId:
+              type: string
+              format: uuid

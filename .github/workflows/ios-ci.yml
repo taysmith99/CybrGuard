@@ -1,0 +1,58 @@
+name: iOS
+
+on:
+  pull_request:
+    paths: ["apps/ios/**", ".github/workflows/ios-ci.yml"]
+  push:
+    paths: ["apps/ios/**", ".github/workflows/ios-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Test core library
+        run: swift test
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build simulator configurations
+        run: |
+          for configuration in Debug Release; do
+            xcodebuild -project Exposure.xcodeproj -scheme Exposure \
+              -configuration "$configuration" -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
+          done
+      - name: Select an installed iPhone simulator
+        run: |
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/simulators.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "simulators.json")) as source:
+              runtimes = json.load(source)["devices"]
+          phones = [device["udid"] for runtime, devices in runtimes.items()
+                    if ".iOS-" in runtime for device in devices
+                    if device["isAvailable"] and device["name"].startswith("iPhone")]
+          if not phones:
+              raise SystemExit("No iPhone simulator runtime is installed on this runner.")
+          with open(os.environ["GITHUB_ENV"], "a") as destination:
+              destination.write(f"IOS_SIMULATOR_ID={phones[0]}\n")
+          PY
+      - name: Test in simulator
+        run: |
+          xcodebuild -project Exposure.xcodeproj -scheme Exposure \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO test

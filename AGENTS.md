@@ -1,7 +1,7 @@
-# AGENTS.md — Consumer Breach Monitoring iOS App
+# AGENTS.md — CybrGuard
 
 > **Status:** Implementation kickoff specification, October 2026  
-> **Working name:** `Exposure` (placeholder; make all branding configurable)  
+> **Product name:** `CybrGuard` (keep branding configurable)\
 > **Goal:** Build and commit a production-minded MVP for a direct-to-consumer iPhone subscription app.  
 > **Audience:** Individuals and families who want to know where their verified email addresses appeared in known data breaches and be notified of newly detected exposures.  
 > **Commercial assumption:** Use the paid [xonAPI+](https://plus.xposedornot.com/products/api) under the user's instruction to assume its licensing permits this consumer product. Keep that assumption documented, rather than making new legal assertions.
@@ -152,6 +152,8 @@ Recommended repository layout:
 │   └── ROADMAP.md
 └── .dev.vars.example
 ```
+
+The existing iOS project, scheme and source directories retain the technical name `Exposure`. Use those identifiers in build commands until the project is renamed; the product name is **CybrGuard**.
 
 Use a single repository with a strict separation between mobile and backend. Avoid putting private provider credentials, RevenueCat server keys or business rules in the iOS app.
 

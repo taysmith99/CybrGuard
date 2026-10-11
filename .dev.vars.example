@@ -1,0 +1,4 @@
+# Copied by npm run dev:setup to apps/api/.dev.vars (ignored by Git).
+# This scaffold makes no provider requests and returns no breach data.
+APP_ENV=development
+DATA_MODE=unconfigured

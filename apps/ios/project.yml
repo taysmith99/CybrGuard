@@ -1,0 +1,58 @@
+name: Exposure
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en-AU
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+packages:
+  ExposureCore:
+    path: .
+targets:
+  Exposure:
+    type: application
+    platform: iOS
+    sources:
+      - Exposure/App
+      - Exposure/Features
+    configFiles:
+      Debug: Config/Debug.xcconfig
+      Release: Config/Release.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER)
+        GENERATE_INFOPLIST_FILE: NO
+        SUPPORTS_MACCATALYST: NO
+      configs:
+        Debug:
+          INFOPLIST_FILE: Config/Info-Debug.plist
+        Release:
+          INFOPLIST_FILE: Config/Info-Release.plist
+    dependencies:
+      - package: ExposureCore
+  ExposureTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - ExposureTests
+    dependencies:
+      - package: ExposureCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.cybrguard.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Exposure:
+    build:
+      targets:
+        Exposure: all
+        ExposureTests: [test]
+    test:
+      targets:
+        - ExposureTests
+      gatherCoverageData: true

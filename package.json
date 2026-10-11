@@ -1,0 +1,41 @@
+{
+  "name": "cybrguard",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "packages/contracts"
+  ],
+  "engines": {
+    "node": ">=24.20.0 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.19.0",
+  "overrides": {
+    "miniflare": {
+      "sharp": "0.35.5"
+    }
+  },
+  "scripts": {
+    "dev:setup": "node scripts/setup.mjs",
+    "dev:api": "npm run dev --workspace @cybrguard/api",
+    "db:migrate:local": "npm run db:migrate:local --workspace @cybrguard/api",
+    "build:api": "npm run build --workspace @cybrguard/api",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:xon": "node scripts/test-xon-api.mjs",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "ios:generate": "cd apps/ios && xcodegen generate",
+    "test:ios:core": "swift test --package-path apps/ios"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
