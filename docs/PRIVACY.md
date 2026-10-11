@@ -13,7 +13,7 @@
 
 ## Account deletion — local implementation
 
-The in-app deletion flow removes the account, encrypted email, count/timestamp, sessions and outstanding challenges. Existing credentials stop working, and an in-flight scan cannot recreate deleted data. Shared pseudonymous abuse counters may remain for 24 hours. No monitoring, APNs or queued jobs are implemented yet; those future consumers must also honour deletion. Upstream historical records and email-provider delivery records are not erased by CybrGuard deletion. Define production backups/retention/processor handling before publishing a deletion promise. Deletion requires no paid subscription.
+The in-app deletion flow removes the account, encrypted email, count/timestamp, findings, remediation marks, premium entitlements, sessions and outstanding challenges. Existing credentials stop working, and an in-flight scan cannot recreate deleted data. Shared pseudonymous abuse counters may remain for 24 hours. No monitoring, APNs or queued jobs are implemented yet; those future consumers must also honour deletion. Upstream historical records and email-provider delivery records are not erased by CybrGuard deletion. Define production backups/retention/processor handling before publishing a deletion promise. Deletion requires no paid subscription.
 
 ## Licence and commercial assumptions
 
@@ -27,4 +27,4 @@ Prepare reviewed privacy and terms pages, consent text, support and deletion con
 
 ## Current stored fields
 
-Cloudflare receives the recipient address and verification email. XON receives the verified address only after consent and code verification. CybrGuard stores an AES-GCM encrypted email, separate HMAC lookup, verification/consent timestamps, last successful count/timestamp, hashed expiring codes and hashed session/device credentials. No detailed breach metadata or raw provider payload is stored in this free slice. The app stores session/device credentials in device-only Keychain; OTP entry is held in memory. See operations for exact lazy-cleanup windows and the production retention gate.
+Cloudflare receives the recipient address and verification email. XON receives the verified address only after consent and code verification. CybrGuard stores an AES-GCM encrypted email, separate HMAC lookup, verification/consent timestamps, last successful count/timestamp, hashed expiring codes and hashed session/device credentials. Free scans store no detailed metadata. Premium scans retain encrypted normalised breach identifiers, source domain/date, exposed data categories, password-risk classification and description, alongside first/last-seen and self-reported remediation timestamps. Raw upstream payloads, logos, record counts, actual passwords and stolen credentials are not retained. The app stores session/device credentials in device-only Keychain; OTP entry is held in memory. See operations for exact lazy-cleanup windows and the production retention gate.

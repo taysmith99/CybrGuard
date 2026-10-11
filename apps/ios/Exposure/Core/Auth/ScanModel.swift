@@ -4,6 +4,8 @@ import Observation
 @Observable @MainActor
 public final class ScanModel {
     public private(set) var account: AccountResponse?
+    public private(set) var findings: [BreachFinding] = []
+    public private(set) var findingsCheckedAt: String?
     public private(set) var challenge: VerificationChallenge?
     public private(set) var isBusy = false
     public private(set) var isScanning = false
@@ -71,7 +73,33 @@ public final class ScanModel {
         await perform {
             let summary = try await authenticated { try await $0.scan(addressId: address.id, credentials: $1, deviceId: self.deviceId) }
             account?.address = summary
+            try await loadFindings()
         }
+    }
+
+    public func reloadFindings() async {
+        await perform {
+            account = try await authenticated { try await $0.account($1, deviceId: self.deviceId) }
+            try await loadFindings()
+        }
+    }
+
+    public func setRemediated(_ finding: BreachFinding, remediated: Bool) async {
+        await perform {
+            guard let address = account?.address else { return }
+            let result = try await authenticated { try await $0.remediate(addressId: address.id, findingId: finding.id, remediated: remediated, credentials: $1, deviceId: self.deviceId) }
+            findings = result.findings
+            findingsCheckedAt = result.checkedAt
+        }
+    }
+
+    private func loadFindings() async throws {
+        guard account?.tier == "premium", let address = account?.address else {
+            findings = []; findingsCheckedAt = nil; return
+        }
+        let result = try await authenticated { try await $0.findings(addressId: address.id, credentials: $1, deviceId: self.deviceId) }
+        findings = result.findings
+        findingsCheckedAt = result.checkedAt
     }
 
     public func logout() async {
@@ -94,6 +122,8 @@ public final class ScanModel {
         try store?.clear()
         credentials = nil
         account = nil
+        findings = []
+        findingsCheckedAt = nil
         isSignedIn = false
         challenge = nil
     }

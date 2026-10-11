@@ -6,7 +6,12 @@ import { URL } from 'node:url';
 // This is an offline test adapter for D1's SQL interface, not a production database.
 export function testDatabase() {
   const db = new DatabaseSync(':memory:');
-  for (const migration of ['0001_development_bootstrap.sql', '0002_verified_scan.sql']) {
+  for (const migration of [
+    '0001_development_bootstrap.sql',
+    '0002_verified_scan.sql',
+    '0003_premium_findings.sql',
+    '0004_details_timestamp.sql',
+  ]) {
     db.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
   }
   const prepare = (sql: string, args: (string | number | null)[] = []) => ({
@@ -15,6 +20,7 @@ export function testDatabase() {
       const row = db.prepare(sql).get(...args);
       return row ? (column ? row[column] : row) : null;
     },
+    all: async () => ({ success: true, results: db.prepare(sql).all(...args) }),
     execute: () => {
       const result = db.prepare(sql).run(...args);
       return { success: true, meta: { changes: Number(result.changes) } };

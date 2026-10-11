@@ -92,3 +92,30 @@ struct ScanClientTests {
     #expect(VerificationCode.formatted("1234") == "123-4")
     #expect(VerificationCode.digits("012-345") == "012345")
 }
+
+private actor FindingsTransport: HTTPTransport {
+    var captured: URLRequest?
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        captured = request
+        let body = #"{"checkedAt":"2026-10-11T12:00:00.000Z","findings":[{"id":"86c199c2-82a3-4683-9514-c3c75c365651","breachId":"Fictional test breach","breachedAt":null,"domain":null,"exposedData":["Passwords"],"passwordRisk":"plaintext","passwordRiskHighlighted":true,"description":null,"firstSeenAt":"2026-10-11T12:00:00.000Z","lastSeenAt":"2026-10-11T12:00:00.000Z","remediatedAt":"2026-10-11T12:01:00.000Z"}]}"#
+        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!)
+    }
+    func request() -> URLRequest? { captured }
+}
+
+@Test func savesRemediationThroughAuthenticatedPatch() async throws {
+    let transport = FindingsTransport()
+    let config = try APIConfiguration(baseURL: "https://api.cybrguard.app", environment: .staging, isDebugBuild: true)
+    let client = ScanClient(configuration: config, transport: transport)
+    let id = "86c199c2-82a3-4683-9514-c3c75c365651"
+    let credentials = SessionCredentials(accessToken: String(repeating: "a", count: 64), refreshToken: String(repeating: "b", count: 64), expiresAt: 1)
+    let result = try await client.remediate(addressId: id, findingId: id, remediated: true, credentials: credentials, deviceId: String(repeating: "c", count: 64))
+    let request = try #require(await transport.request())
+    #expect(request.httpMethod == "PATCH")
+    #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(credentials.accessToken)")
+    #expect(request.value(forHTTPHeaderField: "x-api-key") == nil)
+    let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Bool])
+    #expect(body == ["remediated": true])
+    #expect(result.findings.first?.passwordRiskHighlighted == true)
+    #expect(result.findings.first?.remediatedAt != nil)
+}

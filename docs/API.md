@@ -15,14 +15,15 @@ Every authenticated call sends `Authorization: Bearer <accessToken>` and `X-Devi
 
 ## Account and scans
 
-- `GET /v1/me`: `{ userId, tier: "free", quota: 1, address }`.
+- `GET /v1/me`: `{ userId, tier: "free" | "premium", quota: 1, address }`.
 - `GET /v1/addresses`: `{ addresses: [address] }`.
 - `GET /v1/addresses/:id/summary`: owned verified address summary.
 - `POST /v1/addresses/:id/scan`: calls paid XON with the stored verified address; accepts no email or user ID from the caller. Returns an address summary with a real count/timestamp. One attempt per address per minute, one in-flight scan, and a global provider gate apply. A 429 provider response adds shared backoff. Manual retries are explicit; there is no retry loop or background queue yet.
-- `GET /v1/addresses/:id/findings`: ownership checked, then 403 `subscription_required`. Billing/premium detail access is deliberately unavailable rather than trusting a client premium flag.
+- `GET /v1/addresses/:id/findings`: returns `{ findings, checkedAt }` for the owned address with server-confirmed premium access; otherwise 403 `subscription_required`. The timestamp is the last detailed scan, independently of free count scans.
+- `PATCH /v1/addresses/:id/findings/:findingId`: `{ remediated: boolean }`, with the same ownership/premium checks. Returns the updated findings. Repeated true updates preserve the original remediation timestamp; false clears it. This is a user-reported action, not confirmation of an external password change.
 - `DELETE /v1/me`: deletes the account and cascades stored email, summary and sessions; invalidates outstanding challenges for that address. HTTP 204. A concurrent scan cannot recreate deleted data.
 
-An address summary is `{ id, email, verified: true, knownBreachCount: integer | null, checkedAt: ISO8601 | null }`. `null` means no successful scan; zero means a successful provider result with no known matches. Provider failures preserve prior counts/timestamps. Detailed breach metadata is neither fetched nor persisted in this free vertical slice.
+An address summary is `{ id, email, verified: true, knownBreachCount: integer | null, checkedAt: ISO8601 | null }`. `null` means no successful scan; zero means a successful provider result with no known matches. Provider failures preserve prior counts/timestamps. Free scans request `detailed=false` and never collect metadata. Premium scans request `detailed=true`, validate/normalise fields and encrypt finding details at rest. IDs and remediation marks survive rescans; failed scans preserve previous findings. Only active findings are returned; reappearing findings retain prior marks. Plaintext and easy-to-crack password storage are highlighted; unknown risk is not labelled safe.
 
 ## Abuse controls
 
@@ -30,4 +31,8 @@ Sending limits: five requests per email/hour, one per email/minute, ten per devi
 
 ## Not implemented
 
-Additional-address verification/removal, premium finding status changes, billing webhooks, device registration, scheduled jobs and push routes are not implemented. The OpenAPI document only lists current routes. See the roadmap for later milestones.
+Additional-address verification/removal, billing webhooks, device registration, scheduled jobs and push routes are not implemented. The OpenAPI document only lists current routes. See the roadmap for later milestones.
+
+## Premium authorisation
+
+The client cannot grant premium. The backend checks an unexpired `premium_entitlements` row; no public route writes entitlements, and billing/webhooks are not connected. Staging additionally supports a server-secret `STAGING_PREMIUM_EMAILS` allowlist, honoured only in staging and still requiring independent email verification. This is test access, not a purchased subscription. Address quota remains one in this slice. Account deletion cascades findings, remediation marks and entitlements.

@@ -8,6 +8,7 @@
 - Six-digit codes displayed as `XXX-XXX`, expiring, hashed and single-use with throttling.
 - Encrypted verified address, consent record, hashed device-bound rotating sessions and iOS Keychain storage.
 - Paid XON adapter, real free breach count/timestamp, ownership checks, explicit provider errors, retry limits and preservation of prior results.
+- Premium-gated detailed findings, encrypted metadata, password-storage risk highlights and persistent self-reported remediation marks. Staging testers can be granted explicit server access while billing is pending.
 - Logout and account deletion, including deletion/scan race protection.
 - Offline SQLite/network/security tests and explicit reserved-address live XON smoke tests.
 
@@ -20,7 +21,7 @@ Real mailbox delivery, verification, signed-in session persistence and the paid 
 
 ## M2 — subscriptions and premium details
 
-RevenueCat/StoreKit products, localised prices/trial terms, restore purchases, authenticated idempotent webhooks and entitlement reconciliation. Server-enforced quotas/downgrades, independently verified additional addresses, premium detail normalisation and reviewed/action-taken status. No premium details are exposed before billing exists.
+RevenueCat/StoreKit products, localised prices/trial terms, restore purchases, authenticated idempotent webhooks and entitlement reconciliation. Server-enforced quotas/downgrades, independently verified additional addresses, billing-backed entitlement reconciliation. Detailed findings and remediation are implemented with server gating and staging test grants; paid purchases are not connected.
 
 ## M3 — monitoring and notifications
 

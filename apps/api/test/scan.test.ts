@@ -5,7 +5,8 @@ import {
 } from '@cybrguard/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, type Bindings } from '../src/index';
-import { parseXonCount, XonProvider } from '../src/providers/xon';
+import { hasPremium } from '../src/lib/findings';
+import { parseXonCount, parseXonDetails, XonProvider } from '../src/providers/xon';
 import { testDatabase } from './database';
 
 const device = 'b'.repeat(64);
@@ -96,7 +97,17 @@ beforeEach(() => {
       return Response.json({
         status: 'success',
         email: corruptResponse ? 'different@example.com' : requestedEmail,
-        breaches: ['FictionalTestBreach', 'FictionalTestBreachTwo'],
+        breaches:
+          new URL(url).searchParams.get('detailed') === 'true'
+            ? ['FictionalTestBreach', 'FictionalTestBreachTwo'].map((id, i) => ({
+                breach_id: id,
+                breached_date: '2020-01-01T00:00:00+00:00',
+                domain: null,
+                password_risk: i === 0 ? 'plaintext' : 'unknown',
+                xposed_data: i === 0 ? 'Email addresses;Passwords' : 'Email addresses',
+                xposure_desc: null,
+              }))
+            : ['FictionalTestBreach', 'FictionalTestBreachTwo'],
       });
     }),
   );
@@ -108,6 +119,132 @@ afterEach(() => {
 });
 
 describe('verified paid scan flow (offline fictional provider and email)', () => {
+  it('limits staging premium overrides to the configured staging testers', async () => {
+    const session = await signIn();
+    const account = await me(session.accessToken);
+    env.STAGING_PREMIUM_EMAILS = email;
+    expect(await hasPremium(env, account.userId, email)).toBe(false);
+    env.APP_ENV = 'staging';
+    expect(await hasPremium(env, account.userId, email)).toBe(true);
+    expect(await hasPremium(env, account.userId, 'another@example.com')).toBe(false);
+    env.APP_ENV = 'production';
+    expect(await hasPremium(env, account.userId, email)).toBe(false);
+  });
+  it("prevents a premium user reading or updating another user's findings and cascades account deletion", async () => {
+    const session = await signIn();
+    const owner = await me(session.accessToken);
+    database.raw
+      .prepare('INSERT INTO premium_entitlements VALUES (?, ?)')
+      .run(owner.userId, Math.floor(clock / 1000) + 1000);
+    expect(
+      (await post(`/v1/addresses/${owner.address.id}/scan`, {}, session.accessToken)).status,
+    ).toBe(200);
+    const finding = database.raw.prepare('SELECT id FROM findings LIMIT 1').get();
+    if (!finding) throw new Error('Expected finding');
+    const attacker = await signIn('another@example.com', 'e'.repeat(64));
+    const other = await me(attacker.accessToken, 'e'.repeat(64));
+    database.raw
+      .prepare('INSERT INTO premium_entitlements VALUES (?, ?)')
+      .run(other.userId, Math.floor(clock / 1000) + 1000);
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${owner.address.id}/findings`,
+          auth(attacker.accessToken, 'e'.repeat(64)),
+          env,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${other.address.id}/findings/${finding.id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              ...auth(attacker.accessToken, 'e'.repeat(64)).headers,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ remediated: true }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await app.request('/v1/me', { ...auth(session.accessToken), method: 'DELETE' }, env)).status,
+    ).toBe(204);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM findings').get()?.count).toBe(0);
+    expect(
+      database.raw
+        .prepare('SELECT COUNT(*) AS count FROM premium_entitlements WHERE user_id = ?')
+        .get(owner.userId)?.count,
+    ).toBe(0);
+  });
+
+  it('requests details only with premium access, encrypts them, preserves remediation on rescan, and revokes access on expiry', async () => {
+    const session = await signIn();
+    const account = await me(session.accessToken);
+    const address = account.address;
+    const scan = () => post(`/v1/addresses/${address.id}/scan`, {}, session.accessToken);
+    const list = () =>
+      app.request(`/v1/addresses/${address.id}/findings`, auth(session.accessToken), env);
+    expect((await scan()).status).toBe(200);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM findings').get()?.count).toBe(0);
+    expect((await list()).status).toBe(403);
+    database.raw
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
+      .run(account.userId, Math.floor(clock / 1000) + 1000);
+    advance(61);
+    expect((await scan()).status).toBe(200);
+    let result = (await (await list()).json()) as {
+      findings: {
+        id: string;
+        breachId: string;
+        passwordRiskHighlighted: boolean;
+        remediatedAt: string | null;
+      }[];
+    };
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0]?.passwordRiskHighlighted).toBe(true);
+    expect(result.findings[1]?.passwordRiskHighlighted).toBe(false);
+    expect(JSON.stringify(database.raw.prepare('SELECT * FROM findings').all())).not.toContain(
+      'FictionalTestBreach',
+    );
+    const finding = result.findings[0];
+    if (!finding) throw new Error('Expected a finding');
+    const update = (remediated: boolean, findingId = finding.id, addressId = address.id) =>
+      app.request(
+        `/v1/addresses/${addressId}/findings/${findingId}`,
+        {
+          ...auth(session.accessToken),
+          method: 'PATCH',
+          headers: { ...auth(session.accessToken).headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remediated }),
+        },
+        env,
+      );
+    expect((await update(true)).status).toBe(200);
+    advance(61);
+    expect((await scan()).status).toBe(200);
+    result = (await (await list()).json()) as typeof result;
+    expect(result.findings[0]?.id).toBe(finding.id);
+    expect(result.findings[0]?.remediatedAt).not.toBeNull();
+    expect((await update(false)).status).toBe(200);
+    expect((await update(true, crypto.randomUUID())).status).toBe(404);
+    expect((await update(true, finding.id, crypto.randomUUID())).status).toBe(404);
+    providerStatus = 500;
+    advance(61);
+    expect((await scan()).status).toBe(503);
+    expect(
+      database.raw.prepare('SELECT COUNT(*) AS count FROM findings WHERE active = 1').get()?.count,
+    ).toBe(2);
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    expect((await list()).status).toBe(403);
+    expect((await update(true)).status).toBe(403);
+    expect((await me(session.accessToken)).tier).toBe('free');
+  });
+
   it('requires staging configuration and HTTPS, limits sign-in to testers, and keeps auth enforced', async () => {
     env.APP_ENV = 'staging';
     const origin = 'https://api.cybrguard.app';
@@ -416,6 +553,38 @@ describe('verified paid scan flow (offline fictional provider and email)', () =>
 });
 
 describe('XON defensive parsing', () => {
+  it('validates detailed fields and does not interpret missing or unknown risk as safe', () => {
+    const breach = {
+      breach_id: 'Fictional',
+      breached_date: null,
+      domain: null,
+      xposed_data: null,
+      xposure_desc: null,
+      password_risk: null,
+    };
+    for (const risk of [null, 'unknown', 'hardtocrack', 'plaintext', 'easytocrack']) {
+      const result = parseXonDetails(
+        { status: 'success', email, breaches: [{ ...breach, password_risk: risk }] },
+        email,
+      );
+      expect(result.findings[0]?.passwordRiskHighlighted).toBe(
+        risk === 'plaintext' || risk === 'easytocrack',
+      );
+    }
+    expect(() =>
+      parseXonDetails({ status: 'success', email, breaches: [{ breach_id: 'Fictional' }] }, email),
+    ).toThrow();
+    expect(() =>
+      parseXonDetails({ status: 'success', email, breaches: [breach, breach] }, email),
+    ).toThrow();
+    expect(() =>
+      parseXonDetails(
+        { status: 'success', email: 'different@example.com', breaches: [breach] },
+        email,
+      ),
+    ).toThrow();
+  });
+
   it('invokes fetch without binding the provider as its receiver', async () => {
     const fetcher = async function (this: unknown) {
       expect(this).toBeUndefined();

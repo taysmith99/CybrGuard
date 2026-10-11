@@ -2,7 +2,7 @@
 "info":
   "title": "CybrGuard API"
   "version": "0.1.0"
-  "description": "Real Cloudflare email verification and paid XON manual counts. Local development and restricted HTTPS staging; production blocked. Premium features unavailable."
+  "description": "Real Cloudflare email verification and paid XON manual counts. Local development and restricted HTTPS staging; production blocked. Premium findings and remediation are gated on server access; billing is not connected."
 "servers": [{"url": "http://localhost:8788", "description": "Local development"}, {"url": "https://api.cybrguard.app", "description": "Restricted staging"}]
 "paths":
   "/v1/health":
@@ -192,7 +192,7 @@
       "security": [{"bearerAuth": [], "deviceId": []}]
   "/v1/me":
     "get":
-      "summary": "Read authenticated free account"
+      "summary": "Read authenticated account"
       "responses":
         "200":
           "description": "Success"
@@ -382,46 +382,99 @@
       "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
   "/v1/addresses/{id}/findings":
     "get":
-      "summary": "Premium details are unavailable until billing is connected"
+      "summary": "Read owned premium findings"
       "responses":
-        "403":
-          "description": "Server-confirmed subscription required; no details exposed"
+        "200":
+          "description": "Owned active findings"
           "content":
             "application/json":
               "schema":
-                "$ref": "#/components/schemas/ErrorResponse"
-        "404":
-          "description": "Address is not owned by this account"
-          "content":
-            "application/json":
-              "schema":
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/FindingsResponse"
         "400":
-          "description": "Invalid request or code"
+          "description": "Invalid request"
           "content":
             "application/json":
               "schema":
                 "$ref": "#/components/schemas/ErrorResponse"
         "401":
-          "description": "Sign-in required or session expired"
+          "description": "Sign-in required"
           "content":
             "application/json":
               "schema":
                 "$ref": "#/components/schemas/ErrorResponse"
-        "429":
-          "description": "Rate limited; Retry-After contains seconds"
+        "403":
+          "description": "Premium access required"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "404":
+          "description": "Address or finding not owned"
           "content":
             "application/json":
               "schema":
                 "$ref": "#/components/schemas/ErrorResponse"
         "503":
-          "description": "Configuration, email or provider unavailable"
+          "description": "Service unavailable"
           "content":
             "application/json":
               "schema":
                 "$ref": "#/components/schemas/ErrorResponse"
       "security": [{"bearerAuth": [], "deviceId": []}]
       "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  "/v1/addresses/{id}/findings/{findingId}":
+    "patch":
+      "summary": "Set or undo a self-reported remediation mark"
+      "responses":
+        "200":
+          "description": "Owned active findings"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/FindingsResponse"
+        "400":
+          "description": "Invalid request"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "401":
+          "description": "Sign-in required"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "403":
+          "description": "Premium access required"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "404":
+          "description": "Address or finding not owned"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+        "503":
+          "description": "Service unavailable"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ErrorResponse"
+      "security": [{"bearerAuth": [], "deviceId": []}]
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"name": "findingId", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["remediated"]
+              "properties":
+                "remediated":
+                  "type": "boolean"
 "components":
   "securitySchemes":
     "bearerAuth":
@@ -566,8 +619,55 @@
           "type": "string"
           "format": "uuid"
         "tier":
-          "const": "free"
+          "enum": ["free", "premium"]
         "quota":
           "const": 1
         "address":
           "$ref": "#/components/schemas/AddressSummary"
+
+    "Finding":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["id", "breachId", "breachedAt", "domain", "exposedData", "passwordRisk", "passwordRiskHighlighted", "description", "firstSeenAt", "lastSeenAt", "remediatedAt"]
+      "properties":
+        "id":
+          "type": "string"
+          "format": "uuid"
+        "breachId":
+          "type": "string"
+        "breachedAt":
+          "type": ["string", "null"]
+          "format": "date-time"
+        "domain":
+          "type": ["string", "null"]
+        "exposedData":
+          "type": "array"
+          "items":
+            "type": "string"
+        "passwordRisk":
+          "type": ["string", "null"]
+        "passwordRiskHighlighted":
+          "type": "boolean"
+        "description":
+          "type": ["string", "null"]
+        "firstSeenAt":
+          "type": "string"
+          "format": "date-time"
+        "lastSeenAt":
+          "type": "string"
+          "format": "date-time"
+        "remediatedAt":
+          "type": ["string", "null"]
+          "format": "date-time"
+    "FindingsResponse":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["findings", "checkedAt"]
+      "properties":
+        "findings":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/Finding"
+        "checkedAt":
+          "type": ["string", "null"]
+          "format": "date-time"

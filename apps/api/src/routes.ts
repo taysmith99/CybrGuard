@@ -5,11 +5,13 @@ import {
   authStartSchema,
   authVerifySchema,
   deviceCredentialSchema,
+  remediationSchema,
   sessionResponseSchema,
   verificationResponseSchema,
 } from '@cybrguard/contracts';
 import type { z } from 'zod';
 import type { app as application, Bindings } from './index';
+import { hasPremium, readFindings, requirePremium } from './lib/findings';
 import {
   APIError,
   decrypt,
@@ -342,12 +344,13 @@ export function registerRoutes(app: App) {
   });
   app.get('/v1/me', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id);
     return c.json(
       accountResponseSchema.parse({
         userId: session.user_id,
-        tier: 'free',
+        tier: (await hasPremium(c.env, session.user_id, address.email)) ? 'premium' : 'free',
         quota: 1,
-        address: await account(c.env, session.user_id),
+        address,
       }),
     );
   });
@@ -364,13 +367,26 @@ export function registerRoutes(app: App) {
   });
   app.get('/v1/addresses/:id/findings', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    if ((await account(c.env, session.user_id)).id !== c.req.param('id'))
+    const address = await account(c.env, session.user_id);
+    if (address.id !== c.req.param('id'))
       throw new APIError('not_found', 404, 'Address not found.');
-    throw new APIError(
-      'subscription_required',
-      403,
-      'Breach details require a server-confirmed subscription. Billing is not connected yet.',
-    );
+    await requirePremium(c.env, session.user_id, address.email);
+    return c.json(await readFindings(c.env, address.id));
+  });
+  app.patch('/v1/addresses/:id/findings/:findingId', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id);
+    if (address.id !== c.req.param('id'))
+      throw new APIError('not_found', 404, 'Address not found.');
+    await requirePremium(c.env, session.user_id, address.email);
+    const body = await input(c.req.raw, remediationSchema);
+    const saved = await c.env.DB.prepare(
+      'UPDATE findings SET remediated_at = CASE WHEN ? = 1 THEN COALESCE(remediated_at, ?) ELSE NULL END WHERE id = ? AND address_id = ? AND active = 1 RETURNING id',
+    )
+      .bind(body.remediated ? 1 : 0, new Date().toISOString(), c.req.param('findingId'), address.id)
+      .first();
+    if (!saved) throw new APIError('not_found', 404, 'Finding not found.');
+    return c.json(await readFindings(c.env, address.id));
   });
   app.post('/v1/addresses/:id/scan', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
@@ -400,14 +416,52 @@ export function registerRoutes(app: App) {
         throw new APIError('rate_limited', 429, 'Another scan is running. Try again shortly.', 2);
       const result = await new XonProvider(c.env.XON_API_KEY as string).checkVerifiedEmail(
         address.email,
+        await hasPremium(c.env, session.user_id, address.email),
       );
-      const saved = await c.env.DB.prepare(
-        'UPDATE monitored_emails SET known_breach_count = ?, checked_at = ? WHERE id = ? AND user_id = ? RETURNING id',
-      )
-        .bind(result.knownBreachCount, result.checkedAt, address.id, session.user_id)
-        .first();
-      if (!saved) throw new APIError('unauthorised', 401, 'This account is no longer available.');
-      return c.json(addressSummarySchema.parse({ ...address, ...result }));
+      const statements = [
+        c.env.DB.prepare(
+          'UPDATE monitored_emails SET known_breach_count = ?, checked_at = ? WHERE id = ? AND user_id = ?',
+        ).bind(result.knownBreachCount, result.checkedAt, address.id, session.user_id),
+      ];
+      if (result.findings) {
+        statements.push(
+          c.env.DB.prepare('UPDATE monitored_emails SET details_checked_at = ? WHERE id = ?').bind(
+            result.checkedAt,
+            address.id,
+          ),
+        );
+        statements.push(
+          c.env.DB.prepare('UPDATE findings SET active = 0 WHERE address_id = ?').bind(address.id),
+        );
+        for (const finding of result.findings) {
+          statements.push(
+            c.env.DB.prepare(`INSERT INTO findings (id, address_id, breach_index, encrypted_details, first_seen_at, last_seen_at)
+            SELECT ?, id, ?, ?, ?, ? FROM monitored_emails WHERE id = ? AND user_id = ?
+            ON CONFLICT(address_id, breach_index) DO UPDATE SET encrypted_details = excluded.encrypted_details, last_seen_at = excluded.last_seen_at, active = 1`).bind(
+              crypto.randomUUID(),
+              await keyedHash(
+                c.env.EMAIL_BLIND_INDEX_KEY as string,
+                `${address.id}:${finding.breachId}`,
+              ),
+              await encrypt(c.env.DATA_ENCRYPTION_KEY as string, JSON.stringify(finding)),
+              result.checkedAt,
+              result.checkedAt,
+              address.id,
+              session.user_id,
+            ),
+          );
+        }
+      }
+      const saved = await c.env.DB.batch(statements);
+      if (!saved[0]?.meta.changes)
+        throw new APIError('unauthorised', 401, 'This account is no longer available.');
+      return c.json(
+        addressSummarySchema.parse({
+          ...address,
+          checkedAt: result.checkedAt,
+          knownBreachCount: result.knownBreachCount,
+        }),
+      );
     } catch (error) {
       if (error instanceof APIError && error.code === 'provider_rate_limited')
         await c.env.DB.prepare(

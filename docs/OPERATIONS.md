@@ -6,7 +6,7 @@ Run the root README commands. The Worker uses a local D1 database and is bound t
 
 `npm run dev:setup` reads the ignored root `.env` without executing it. Supported variables: `XON_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_EMAIL_TOKEN` (mapped to Worker secret `CLOUDFLARE_EMAIL_API_TOKEN`), `CLOUDFLARE_EMAIL_API_TOKEN`, and `EMAIL_FROM`. It copies only supported values to ignored `apps/api/.dev.vars`, preserves/generates encryption/HMAC keys and sets mode `live` if an XON key is present. Configuration is written with mode 0600 and values are never printed. Restart Wrangler after re-running setup. Do not delete/rotate generated keys without a data migration; existing protected emails would become unreadable or unfindable.
 
-The latest migration creates users, encrypted monitored email/consent records, hashed single-use verification challenges, hashed device-bound session credentials, shared rate limits and count/timestamp storage. It does not create premium finding metadata or billing/job/device tables.
+The latest migration creates users, encrypted monitored email/consent records, hashed single-use verification challenges, hashed device-bound session credentials, shared rate limits and count/timestamp storage. Schema version 4 adds premium entitlements, encrypted normalised findings, remediation timestamps and a separate detailed-scan timestamp. Billing/webhooks and job/device tables remain unimplemented.
 
 ## Cloudflare Email Service
 
@@ -26,11 +26,11 @@ Official references: [Email REST API](https://developers.cloudflare.com/email-se
 
 ## XON and rate limits
 
-The API calls only the fixed HTTPS origin `plus-api.xposedornot.com`, with the server-side key and `detailed=false`. It validates success/envelope/address/unique breach IDs and retains only the count and last successful timestamp. Redirects, timeouts, bad payloads, auth failures, 404s and rate limits are never treated as clean results. No raw breach payload is logged or stored. The development command disables Wrangler local explorer and local observability, and Wrangler configuration disables trace collection, because outbound XON URLs contain an email address. Preserve these safeguards when changing tooling; before enabling telemetry, verify upstream paths and credentials are redacted.
+The API calls only the fixed HTTPS origin `plus-api.xposedornot.com`, with the server-side key and `detailed=false` for free accounts or `detailed=true` after server-side premium checks. It validates success/envelope/address/unique breach IDs and retains the count/timestamp plus encrypted minimal finding details for premium scans. Redirects, timeouts, bad payloads, auth failures, 404s and rate limits are never treated as clean results. No raw breach payload is logged or stored. The development command disables Wrangler local explorer and local observability, and Wrangler configuration disables trace collection, because outbound XON URLs contain an email address. Preserve these safeguards when changing tooling; before enabling telemetry, verify upstream paths and credentials are redacted.
 
 The global gate permits at most one request per 1.5 seconds and respects `detail.retry_after` from 429 responses. Each verified address may attempt one scan/minute. Confirm the purchased quota/burst rate before multi-user deployment; these conservative development defaults are not a statement of the vendor's contract. Automatic monitoring/queue retries are not implemented.
 
-Official [OpenAPI](https://plus-api.xposedornot.com/openapi.json) and [quickstart](https://plus.xposedornot.com/blog/xonapi-quickstart) were checked during implementation. The served OpenAPI still references missing response components, so parsing uses the documented simple response and the reserved-address smoke suite. Complete caching/storage terms, purchased rate limits and webhook availability require confirmation in the vendor console. Detailed metadata is intentionally not collected here; the only retained scan data is count/timestamp. Consumer licensing remains the owner's documented assumption.
+Official [OpenAPI](https://plus-api.xposedornot.com/openapi.json) and [quickstart](https://plus.xposedornot.com/blog/xonapi-quickstart) were checked during implementation. The served OpenAPI still references missing response components, so parsing uses the documented simple response and the reserved-address smoke suite. Complete caching/storage terms, purchased rate limits and webhook availability require confirmation in the vendor console. Premium details are normalised and encrypted; raw payloads, logos, record counts, actual passwords and stolen credentials are not retained. Consumer licensing remains the owner's documented assumption.
 
 ## Sessions, retention and deletion
 
@@ -52,4 +52,10 @@ For iPhone testing, copy `apps/ios/Config/Staging.xcconfig.example` to ignored `
 
 Verified deployment checks: trusted HTTPS health 200, no-store and HSTS headers, unauthenticated account 401, unapproved email 403 without sending mail, and invalid challenge 400. Actual mailbox verification/scan must still be completed independently against staging; local simulator results are not staging results.
 
-`npm run build:api` remains a local dry run. Before production: establish separate production resources, backups, perimeter/abuse controls, scheduled retention, key rotation, consent/legal notices, email delivery operations and operational incident procedures. App Store/RevenueCat/APNs setup remains on the roadmap; staging does not implement subscriptions, premium details, scheduled monitoring or push notifications.
+`npm run build:api` remains a local dry run. Before production: establish separate production resources, backups, perimeter/abuse controls, scheduled retention, key rotation, consent/legal notices, email delivery operations and operational incident procedures. App Store/RevenueCat/APNs setup remains on the roadmap; staging does not implement purchases, scheduled monitoring or push notifications.
+
+## Premium test access
+
+`STAGING_PREMIUM_EMAILS` in ignored `.env.staging` is uploaded as a Worker secret. It grants verified tester accounts access to detailed scans only in staging. It does not skip OTP ownership checks. A new scan is required to populate details from count-only history. The development simulator tester has a seven-day local entitlement for testing; production remains disabled and no payment is implied. Future authenticated billing reconciliation must populate/expire `premium_entitlements` before purchases can be offered. No client premium flag is accepted.
+
+Findings are matched by an address-specific keyed breach index and stored as AES-GCM encrypted metadata. Remediation timestamps survive refreshes, rescans and disappearing/reappearing records; deletion cascades all finding and entitlement rows. Marking a finding remediated cannot verify a password change or erase a historical exposure.

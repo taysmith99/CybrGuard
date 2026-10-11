@@ -1,7 +1,12 @@
+import { type BreachDetails, breachDetailsSchema } from '@cybrguard/contracts';
+import { z } from 'zod';
 import { APIError } from '../lib/security';
 
 export interface BreachIntelligenceProvider {
-  checkVerifiedEmail(email: string): Promise<{ checkedAt: string; knownBreachCount: number }>;
+  checkVerifiedEmail(
+    email: string,
+    detailed?: boolean,
+  ): Promise<{ checkedAt: string; knownBreachCount: number; findings?: BreachDetails[] }>;
 }
 
 export class XonProvider implements BreachIntelligenceProvider {
@@ -10,14 +15,17 @@ export class XonProvider implements BreachIntelligenceProvider {
     private fetcher: typeof fetch = fetch,
   ) {}
 
-  async checkVerifiedEmail(email: string) {
+  async checkVerifiedEmail(
+    email: string,
+    detailed = false,
+  ): Promise<{ checkedAt: string; knownBreachCount: number; findings?: BreachDetails[] }> {
     if (!this.key)
       throw new APIError('provider_unavailable', 503, 'Breach intelligence is not configured.');
     const url = new URL(
       `https://plus-api.xposedornot.com/v3/check-email/${encodeURIComponent(email)}`,
     );
-    // Free access needs a count only. Do not collect detailed metadata before billing exists.
-    url.searchParams.set('detailed', 'false');
+    // The route chooses detailed mode only after checking server-side premium access.
+    url.searchParams.set('detailed', String(detailed));
     let response: Response;
     try {
       // Workers fetch requires its global receiver; do not invoke it as a class method.
@@ -86,7 +94,7 @@ export class XonProvider implements BreachIntelligenceProvider {
         'The breach provider returned an unsupported response.',
       );
     }
-    return parseXonCount(body, email);
+    return detailed ? parseXonDetails(body, email) : parseXonCount(body, email);
   }
 }
 
@@ -106,4 +114,57 @@ export function parseXonCount(body: unknown, email: string) {
     );
   }
   return { checkedAt: new Date().toISOString(), knownBreachCount: value.breaches.length };
+}
+
+const detailedBreachSchema = z.object({
+  breach_id: z.string().trim().min(1).max(500),
+  breached_date: z.iso.datetime({ offset: true }).nullable(),
+  domain: z.string().max(500).nullable(),
+  password_risk: z.string().max(500).nullable(),
+  xposed_data: z.string().max(5000).nullable(),
+  xposure_desc: z.string().max(20000).nullable(),
+});
+
+export function parseXonDetails(body: unknown, email: string) {
+  const parsed = z
+    .object({
+      status: z.literal('success'),
+      email: z.literal(email),
+      breaches: z.array(detailedBreachSchema).max(5000),
+    })
+    .safeParse(body);
+  if (
+    !parsed.success ||
+    new Set(parsed.data.breaches.map((b) => b.breach_id)).size !== parsed.data.breaches.length
+  )
+    throw new APIError(
+      'provider_bad_response',
+      502,
+      'The breach provider returned an unsupported response.',
+    );
+  const findings = parsed.data.breaches.map((breach) => {
+    const risk = breach.password_risk?.trim().toLowerCase().replace(/[_-]/g, ' ') ?? '';
+    return breachDetailsSchema.parse({
+      breachId: breach.breach_id,
+      breachedAt: breach.breached_date,
+      domain: breach.domain,
+      passwordRisk: breach.password_risk,
+      passwordRiskHighlighted: [
+        'plaintext',
+        'plain text',
+        'easy to crack',
+        'easytocrack',
+        'weak',
+        'weak hash',
+        'weak hashing',
+        'unencrypted',
+      ].includes(risk),
+      exposedData: (breach.xposed_data ?? '')
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean),
+      description: breach.xposure_desc,
+    });
+  });
+  return { checkedAt: new Date().toISOString(), knownBreachCount: findings.length, findings };
 }

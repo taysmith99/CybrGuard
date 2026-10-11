@@ -26,6 +26,25 @@ public struct AccountResponse: Decodable, Sendable {
     public var address: AddressSummary
 }
 
+public struct BreachFinding: Decodable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let breachId: String
+    public let breachedAt: String?
+    public let domain: String?
+    public let exposedData: [String]
+    public let passwordRisk: String?
+    public let passwordRiskHighlighted: Bool
+    public let description: String?
+    public let firstSeenAt: String
+    public let lastSeenAt: String
+    public let remediatedAt: String?
+}
+
+public struct FindingsResponse: Decodable, Sendable {
+    public let findings: [BreachFinding]
+    public let checkedAt: String?
+}
+
 public enum ScanClientError: Error, LocalizedError, Equatable {
     case server(status: Int, code: String, message: String, retryAfter: Int?)
     case invalidResponse
@@ -75,6 +94,16 @@ public struct ScanClient: Sendable {
     public func scan(addressId: String, credentials: SessionCredentials, deviceId: String) async throws -> AddressSummary {
         guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
         return try await json(path: "addresses/\(addressId)/scan", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func findings(addressId: String, credentials: SessionCredentials, deviceId: String) async throws -> FindingsResponse {
+        guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
+        return try await json(path: "addresses/\(addressId)/findings", method: "GET", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func remediate(addressId: String, findingId: String, remediated: Bool, credentials: SessionCredentials, deviceId: String) async throws -> FindingsResponse {
+        guard UUID(uuidString: addressId) != nil, UUID(uuidString: findingId) != nil else { throw ScanClientError.invalidResponse }
+        return try await json(path: "addresses/\(addressId)/findings/\(findingId)", method: "PATCH", body: ["remediated": .bool(remediated)], credentials: credentials, deviceId: deviceId)
     }
 
     public func logout(_ credentials: SessionCredentials, deviceId: String) async throws {

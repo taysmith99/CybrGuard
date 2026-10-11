@@ -9,6 +9,7 @@ export type Bindings = EmailConfiguration & {
   APP_ENV: string;
   DATA_MODE: string;
   STAGING_ALLOWED_EMAILS?: string;
+  STAGING_PREMIUM_EMAILS?: string;
   XON_API_KEY?: string;
   DATA_ENCRYPTION_KEY?: string;
   EMAIL_BLIND_INDEX_KEY?: string;
@@ -73,7 +74,7 @@ app.get('/v1/health', async (c) => {
     const version = await c.env.DB.prepare(
       'SELECT version FROM schema_metadata WHERE id = 1',
     ).first<number>('version');
-    if ((version !== 1 && version !== 2) || (c.env.DATA_MODE === 'live' && version !== 2))
+    if (![1, 2, 3, 4].includes(version ?? 0) || (c.env.DATA_MODE === 'live' && version !== 4))
       throw new Error('Schema is not ready');
   } catch {
     return c.json(error('database_unavailable', 'Database is not ready.', c.get('requestId')), 503);

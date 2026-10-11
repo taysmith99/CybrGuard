@@ -10,7 +10,7 @@ flowchart TD
     API -->|Verified address + server key only| XON[Paid xonAPI+]
 ```
 
-The app has Scan, Addresses, Monitoring and Settings tabs. Authentication and real manual counts are connected. Billing, premium details, monitoring and APNs remain unavailable.
+The app has Scan, Addresses, Monitoring and Settings tabs. Authentication and real manual counts are connected. Premium findings and self-reported remediation are connected behind server access checks; billing, monitoring and APNs remain unavailable.
 
 Trust boundaries: the native app supplies email/consent before verification but cannot choose a lookup address after login. A one-time code is sent to the real mailbox and consumed server-side before creating/reusing an account. Every account/address route resolves a user from hashed session and device credentials and checks resource ownership. There is no arbitrary-email scan endpoint or local OTP bypass. Provider failures preserve prior successful counts. Free responses expose only the count, not provider breach details.
 

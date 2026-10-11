@@ -33,7 +33,9 @@ struct MVPView: View {
                                         .font(.footnote).foregroundStyle(.secondary)
                                 }
                                 Text("Source: paid XposedOrNot (xonAPI+)").font(.footnote)
-                                NavigationLink("Breach details and monitoring") { SubscriptionView() }
+                                if model.account?.tier == "premium" {
+                                    NavigationLink("Breach details and remediation") { FindingsView(model: model) }
+                                } else { NavigationLink("Unlock breach details") { SubscriptionView() } }
                             } else { Text("Your email is verified. Run your first scan to see its known breach count.") }
                             Button(model.isScanning ? "Scanning…" : "Scan verified email") { Task { await model.scan() } }
                                 .disabled(model.isBusy)
@@ -106,7 +108,7 @@ struct MVPView: View {
                         NavigationLink("Privacy") {
                             InformationView(title: "Privacy", paragraphs: [
                                 "Cloudflare Email Service receives your email to deliver a one-time verification code. After you verify and consent, the backend sends the verified address to the paid XposedOrNot (xonAPI+) service.",
-                                "The backend encrypts your email at rest and stores its verified status, consent time, last successful breach count and scan time. Verification codes are hashed, expire after 10 minutes and are removed during later sign-in requests after expiry. Session tokens are stored in your device Keychain; codes are not saved by the app.",
+                                "The backend encrypts your email at rest and stores its verified status, consent time, last successful breach count and scan time. For premium access, individual breach details are encrypted at rest and your remediation marks are stored. Verification codes are hashed, expire after 10 minutes and are removed during later sign-in requests after expiry. Session tokens are stored in your device Keychain; codes are not saved by the app.",
                                 "Account deletion removes the stored account, email, results, verification challenges and sessions from CybrGuard. It does not erase historical records at the breach provider or email-provider delivery records.",
                                 "This is a development notice. Production retention, privacy policy and terms require review before launch."
                             ])
@@ -139,7 +141,7 @@ struct MVPView: View {
         .sheet(isPresented: $showSignIn, onDismiss: { model.cancelVerification() }) { SignInView(model: model) }
         .confirmationDialog("Delete your CybrGuard account and stored data?", isPresented: $confirmDeletion, titleVisibility: .visible) {
             Button("Delete account permanently", role: .destructive) { Task { await model.deleteAccount() } }
-        } message: { Text("Your email, scan count and sessions will be removed. Historical breach records at XON will remain.") }
+        } message: { Text("Your email, findings, remediation marks, scan count and sessions will be removed. Historical breach records at XON will remain.") }
     }
 
     @ViewBuilder private var errorMessage: some View {
@@ -256,5 +258,60 @@ private struct InformationView: View {
     let paragraphs: [String]
     var body: some View {
         List { ForEach(paragraphs, id: \.self) { Text($0) } }.navigationTitle(title)
+    }
+}
+
+private struct FindingsView: View {
+    @Bindable var model: ScanModel
+
+    private func remediationDate(_ value: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)?.formatted(date: .abbreviated, time: .omitted) ?? value
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Text("Highlighted findings report plaintext or easy-to-crack password storage.")
+                Text("Remediated means you report taking action. CybrGuard cannot verify external password changes or remove historical breach records.").font(.footnote).foregroundStyle(.secondary)
+            }
+            if model.account?.tier != "premium" {
+                Text("Premium access is required. Purchases are not connected yet.")
+            } else if model.isBusy && model.findings.isEmpty {
+                ProgressView("Loading findings…")
+            } else if model.findings.isEmpty {
+                Text(model.findingsCheckedAt == nil ? "Run a new scan to load detailed findings." : "No known breaches were returned by the last detailed scan.")
+            }
+            if model.account?.tier == "premium" {
+                ForEach(model.findings) { finding in
+                    Section {
+                        Text(finding.breachId).font(.headline)
+                        if finding.passwordRiskHighlighted {
+                            Label("Password storage risk", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange).font(.headline)
+                        }
+                        LabeledContent("Password storage", value: finding.passwordRisk ?? "Unknown")
+                        if let date = finding.breachedAt { LabeledContent("Breach date", value: String(date.prefix(10))) }
+                        if let domain = finding.domain { LabeledContent("Source domain", value: domain) }
+                        if !finding.exposedData.isEmpty { Text("Exposed data: \(finding.exposedData.joined(separator: ", "))") }
+                        if let description = finding.description { Text(description).font(.footnote) }
+                        if finding.passwordRiskHighlighted {
+                            Text("Change the affected password and any reused copies. Use unique passwords and enable multi-factor authentication where available.").font(.footnote)
+                        }
+                        if let date = finding.remediatedAt {
+                            Label("Remediated (self-reported) · \(remediationDate(date))", systemImage: "checkmark.circle")
+                        }
+                        Button(finding.remediatedAt == nil ? "Mark as remediated" : "Undo remediation mark") {
+                            Task { await model.setRemediated(finding, remediated: finding.remediatedAt == nil) }
+                        }.disabled(model.isBusy)
+                    }
+                }
+            }
+            if let message = model.message { Text(message).foregroundStyle(.red) }
+        }
+        .navigationTitle("Breach findings")
+        .task { await model.reloadFindings() }
+        .refreshable { await model.reloadFindings() }
     }
 }

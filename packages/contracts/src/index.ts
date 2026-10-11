@@ -57,7 +57,7 @@ export const verificationResponseSchema = z.strictObject({
 });
 export const accountResponseSchema = z.strictObject({
   userId: z.uuid(),
-  tier: z.literal('free'),
+  tier: z.enum(['free', 'premium']),
   quota: z.literal(1),
   address: addressSummarySchema,
 });
@@ -81,3 +81,25 @@ export const authRefreshSchema = z.strictObject({
   refreshToken: deviceCredentialSchema,
   deviceId: deviceCredentialSchema,
 });
+
+export const breachDetailsSchema = z.strictObject({
+  breachId: z.string().min(1).max(500),
+  breachedAt: z.string().nullable(),
+  domain: z.string().max(500).nullable(),
+  exposedData: z.array(z.string().max(500)).max(100),
+  passwordRisk: z.string().max(500).nullable(),
+  passwordRiskHighlighted: z.boolean(),
+  description: z.string().max(20000).nullable(),
+});
+export const findingSchema = breachDetailsSchema.extend({
+  id: z.uuid(),
+  firstSeenAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  remediatedAt: z.iso.datetime().nullable(),
+});
+export const findingsResponseSchema = z.strictObject({
+  findings: z.array(findingSchema),
+  checkedAt: z.iso.datetime().nullable(),
+});
+export const remediationSchema = z.strictObject({ remediated: z.boolean() });
+export type BreachDetails = z.infer<typeof breachDetailsSchema>;

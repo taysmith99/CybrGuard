@@ -1,6 +1,6 @@
 # Billing implementation plan
 
-Billing is not implemented in this local scan vertical slice. There is no RevenueCat SDK, webhook, entitlement enforcement, App Store product or working paywall in this starter.
+Billing is not implemented in this local scan vertical slice. There is no RevenueCat SDK, webhook, App Store product or working purchase flow. Detailed findings are enforced against server-side expiring entitlements, with a separate staging-only tester override; neither is proof of a purchase.
 
 The brief proposes free, Personal and Family tiers with independently verified address quotas. Its AUD prices are proposals, not configured store products. Use localised StoreKit/RevenueCat product information in a future paywall; do not hard-code advertised pricing or trust a client premium flag.
 
