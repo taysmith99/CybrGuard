@@ -4,3 +4,6 @@ APP_BUNDLE_IDENTIFIER = app.cybrguard
 API_BASE_URL = http:/$()/localhost:8788
 API_ENVIRONMENT = development
 // DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID
+
+// RevenueCat public Apple SDK key (not the server secret).
+REVENUECAT_PUBLIC_KEY =

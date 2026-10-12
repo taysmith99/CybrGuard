@@ -139,3 +139,10 @@ export const monitoringResponseSchema = z.strictObject({
   outcome: z.string().nullable(),
   pushAvailable: z.literal(false),
 });
+
+export const billingStatusSchema = z.strictObject({
+  configured: z.boolean(),
+  plan: z.enum(['free', 'personal', 'family']),
+  expiresAt: z.number().int().nullable(),
+  verifiedAt: z.number().int().nullable(),
+});

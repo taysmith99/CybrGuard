@@ -20,6 +20,13 @@ public struct AddressSummary: Decodable, Sendable, Equatable {
     public let checkedAt: String?
 }
 
+public struct BillingStatus: Decodable, Sendable {
+    public let configured: Bool
+    public let plan: String
+    public let expiresAt: Int?
+    public let verifiedAt: Int?
+}
+
 public struct MonitoringStatus: Decodable, Sendable {
     public let enabled: Bool
     public let paused: Bool
@@ -170,6 +177,14 @@ public struct ScanClient: Sendable {
     public func setMonitoring(addressId: String, enabled: Bool, credentials: SessionCredentials, deviceId: String) async throws {
         guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
         _ = try await request(path: "addresses/\(addressId)/monitoring", method: "PATCH", body: ["enabled": .bool(enabled)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func billingStatus(_ credentials: SessionCredentials, deviceId: String) async throws -> BillingStatus {
+        try await json(path: "billing", method: "GET", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func reconcileBilling(_ credentials: SessionCredentials, deviceId: String) async throws {
+        _ = try await request(path: "billing/reconcile", credentials: credentials, deviceId: deviceId)
     }
 
     public func sessions(_ credentials: SessionCredentials, deviceId: String) async throws -> ActiveSessionList {

@@ -18,6 +18,7 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <key>RevenueCatPublicKey</key><string>$(REVENUECAT_PUBLIC_KEY)</string>
     <key>APIBaseURL</key><string>$(API_BASE_URL)</string>
     <key>APIEnvironment</key><string>$(API_ENVIRONMENT)</string>
 </dict></plist>

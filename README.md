@@ -4,7 +4,7 @@ A plain SwiftUI iPhone app with a Cloudflare Workers API and paid **xonAPI+** br
 
 **Current state:** email ownership verification, device-bound sessions, manual breach counts, local D1 persistence, sign-out and account deletion are connected. Verification mail uses **Cloudflare Email Service**, from `security@cybrguard.app`. XON queries run on the server only, after successful verification and consent. No fake breach data or verification bypass is used by the running app.
 
-Premium detailed findings, password-storage risk highlights and self-reported remediation marks are implemented behind server access checks. Purchases, additional addresses, scheduled monitoring and push notifications remain unimplemented. Restricted staging is deployed at `https://api.cybrguard.app`. Production remains disabled; this is not a release-ready service.
+Premium detailed findings, password-storage risk highlights and self-reported remediation marks are implemented behind server access checks. Additional verified addresses, quotas, active-session controls, remediation action checklists and opt-in daily Cron/Queue monitoring are implemented. Subscription screens, RevenueCat purchase/restore adapters and authenticated server reconciliation/webhooks are implemented as groundwork; live purchases require Apple/RevenueCat configuration. Push delivery remains unavailable. See [billing setup](docs/BILLING.md) and the [feature checklist](short_checklist.md). Restricted staging is deployed at `https://api.cybrguard.app`. Production remains disabled; this is not a release-ready service.
 
 ## Local development
 

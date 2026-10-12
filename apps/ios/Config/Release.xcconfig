@@ -1,3 +1,4 @@
+REVENUECAT_PUBLIC_KEY =
 APP_DISPLAY_NAME = CybrGuard
 APP_BUNDLE_IDENTIFIER = app.cybrguard
 // Intentionally blank: no production API has been deployed.

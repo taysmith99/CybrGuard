@@ -31,11 +31,11 @@ Sending limits: five requests per email/hour, one per email/minute, ten per devi
 
 ## Not implemented
 
-Billing webhooks, device registration and push routes are not implemented. The OpenAPI document only lists current routes. See the roadmap for later milestones.
+Device registration and push routes are not implemented. Billing adapters and webhook/reconciliation routes are implemented but require Apple/RevenueCat account configuration before real purchases. The OpenAPI document only lists current routes. See the roadmap for later milestones.
 
 ## Premium authorisation
 
-The client cannot grant premium. The backend checks an unexpired `premium_entitlements` row; no public route writes entitlements, and billing/webhooks are not connected. Staging additionally supports a server-secret `STAGING_PREMIUM_EMAILS` allowlist, honoured only in staging and still requiring independent email verification. This is test access, not a purchased subscription. Free quota is one; administrative premium entitlement quotas default to three, and are bounded to 25. Staging test access defaults to three. Account deletion cascades findings, remediation marks and entitlements.
+The client cannot grant premium. The backend checks an unexpired `premium_entitlements` row; authenticated reconciliation and authenticated RevenueCat webhooks write entitlements only after a fresh provider lookup. Missing billing credentials leave those routes unavailable. Staging additionally supports a server-secret `STAGING_PREMIUM_EMAILS` allowlist, honoured only in staging and still requiring independent email verification. This is test access, not a purchased subscription. Free quota is one; administrative premium entitlement quotas default to three, and are bounded to 25. Staging test access defaults to three. Account deletion cascades findings, remediation marks and entitlements.
 
 ## Remediation checklist
 
@@ -59,3 +59,10 @@ Findings include `remediationSteps: [{ id, title, detail, completedAt }]`. Guida
 - Cron runs every 15 minutes, selects due verified opted-in addresses, checks premium/quota and enqueues opaque job IDs. Consumer concurrency is one, with a shared upstream rate gate also used by manual scans. Successful checks schedule the next daily check. Temporary failures retry with backoff; after eight durable attempts the job fails and another daily attempt can follow.
 - Jobs deduplicate by address, preference generation and scheduled time. Stalled dispatches are recovered after 15 minutes; completed duplicate deliveries do no provider work. Deletion cascades jobs. Disabled/deleted/over-quota addresses are rechecked before scanning; preference generation and scan lease guard persistence after the provider returns.
 - The first detailed scan establishes a historical baseline. Later unseen provider IDs receive `isNew: true`; repeated IDs retain original identity/progress. Marking a finding remediated clears its new badge. No notification delivery is implied.
+
+## Billing
+
+- `GET /v1/billing`: authenticated `{ configured, plan: "free" | "personal" | "family", expiresAt, verifiedAt }`. Unix timestamps are nullable. Stale/expired confirmation reports free. Administrative staging tester access is separate from purchased subscription status.
+- `POST /v1/billing/reconcile`: authenticated, no client entitlement fields; fresh RevenueCat subscriber lookup for the authenticated account UUID, HTTP 204. Twelve requests/account/hour. Provider failure preserves the previous confirmed snapshot.
+- `POST /v1/billing/revenuecat/webhook`: server-to-server, exact configured Authorization header, matching app ID and SANDBOX events only. Event IDs deduplicate after successful processing. Returns HTTP 200 `{ received: true }`. Refunds/expiry/transfer/cancellation use fresh subscriber snapshots, never a client/event premium flag. Missing configuration returns 503. Invalid authentication returns 401; wrong app/environment returns 403.
+- Billing snapshots refresh after six hours through Cron; access freshness is capped at 24 hours and confirmed entitlement expiry. Downgrades retain addresses while pausing extra slots. See `BILLING.md` for exact configuration and manual sandbox release checks.

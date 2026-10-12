@@ -181,6 +181,19 @@ public final class ScanModel {
         }
     }
 
+    public func billingConfigured() async -> Bool {
+        var configured = false
+        await perform { configured = try await authenticated { try await $0.billingStatus($1, deviceId: self.deviceId) }.configured }
+        return configured
+    }
+
+    public func reconcileSubscription() async -> Bool {
+        await perform {
+            try await authenticated { try await $0.reconcileBilling($1, deviceId: self.deviceId) }
+            try await loadAccount()
+        }
+    }
+
     public func reloadSessions() async {
         await perform { sessions = try await authenticated { try await $0.sessions($1, deviceId: self.deviceId) }.sessions }
     }

@@ -1,6 +1,7 @@
 import { type ErrorResponse, environmentSchema, healthResponseSchema } from '@cybrguard/contracts';
 import { Hono } from 'hono';
 import { consumeMonitoring, type MonitoringMessage, scheduleMonitoring } from './jobs/monitoring';
+import { reconcileDueBilling } from './lib/billing';
 import { APIError } from './lib/security';
 import { type EmailConfiguration, requireEmailConfiguration } from './providers/email';
 import { registerRoutes } from './routes';
@@ -13,6 +14,9 @@ export type Bindings = EmailConfiguration & {
   STAGING_ALLOWED_EMAILS?: string;
   STAGING_PREMIUM_EMAILS?: string;
   XON_API_KEY?: string;
+  REVENUECAT_SECRET_KEY?: string;
+  REVENUECAT_WEBHOOK_AUTH?: string;
+  REVENUECAT_APP_ID?: string;
   DATA_ENCRYPTION_KEY?: string;
   EMAIL_BLIND_INDEX_KEY?: string;
 };
@@ -77,8 +81,8 @@ app.get('/v1/health', async (c) => {
       'SELECT version FROM schema_metadata WHERE id = 1',
     ).first<number>('version');
     if (
-      ![1, 2, 3, 4, 5, 6, 7].includes(version ?? 0) ||
-      (c.env.DATA_MODE === 'live' && version !== 7)
+      ![1, 2, 3, 4, 5, 6, 7, 8].includes(version ?? 0) ||
+      (c.env.DATA_MODE === 'live' && version !== 8)
     )
       throw new Error('Schema is not ready');
   } catch {
@@ -118,6 +122,7 @@ app.onError((cause, c) => {
 export default {
   fetch: app.fetch,
   scheduled: async (_controller: ScheduledController, env: Bindings) => {
+    await reconcileDueBilling(env);
     await scheduleMonitoring(env);
   },
   queue: consumeMonitoring,

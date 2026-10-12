@@ -1,0 +1,97 @@
+{
+  "identifier": "31F694CE-F86E-4802-A583-145B7A168F4A",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_applicationInternalID": "",
+    "_developerTeamID": "",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_AU",
+    "_storefront": "AUS"
+  },
+  "subscriptionGroups": [
+    {
+      "id": "1000",
+      "localizations": [
+        {
+          "description": "Local test subscriptions",
+          "displayName": "CybrGuard Test",
+          "locale": "en_AU"
+        }
+      ],
+      "name": "CybrGuard Test",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "4.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "1001",
+          "localizations": [
+            {
+              "description": "Local fictional subscription test only",
+              "displayName": "CybrGuard Personal Weekly",
+              "locale": "en_AU"
+            }
+          ],
+          "productID": "app.cybrguard.personal.weekly",
+          "recurringSubscriptionPeriod": "P1W",
+          "referenceName": "personal.weekly",
+          "subscriptionGroupID": "1000",
+          "type": "RecurringSubscription",
+          "introductoryOffer": {
+            "internalID": "2001",
+            "numberOfPeriods": 1,
+            "paymentMode": "free",
+            "subscriptionPeriod": "P1W"
+          }
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "14.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "1002",
+          "localizations": [
+            {
+              "description": "Local fictional subscription test only",
+              "displayName": "CybrGuard Personal Monthly",
+              "locale": "en_AU"
+            }
+          ],
+          "productID": "app.cybrguard.personal.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "personal.monthly",
+          "subscriptionGroupID": "1000",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "7.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "1003",
+          "localizations": [
+            {
+              "description": "Local fictional subscription test only",
+              "displayName": "CybrGuard Family Weekly",
+              "locale": "en_AU"
+            }
+          ],
+          "productID": "app.cybrguard.family.weekly",
+          "recurringSubscriptionPeriod": "P1W",
+          "referenceName": "family.weekly",
+          "subscriptionGroupID": "1000",
+          "type": "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

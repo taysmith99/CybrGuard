@@ -5,6 +5,7 @@ import {
   authRefreshSchema,
   authStartSchema,
   authVerifySchema,
+  billingStatusSchema,
   deviceCredentialSchema,
   monitoringResponseSchema,
   monitoringUpdateSchema,
@@ -14,8 +15,9 @@ import {
   sessionResponseSchema,
   verificationResponseSchema,
 } from '@cybrguard/contracts';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { app as application, Bindings } from './index';
+import { reconcileBilling, requireBillingConfiguration } from './lib/billing';
 import {
   addressQuota,
   hasPremium,
@@ -38,7 +40,7 @@ import { requireEmailConfiguration, sendVerificationEmail } from './providers/em
 type App = typeof application;
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-async function input<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
+async function input<T>(request: Request, schema: z.ZodType<T>, maximum = 4096): Promise<T> {
   // Bounded body reading also handles requests without a Content-Length header.
   const reader = request.body?.getReader();
   if (!reader) throw new APIError('invalid_request', 400, 'A JSON request is required.');
@@ -48,7 +50,7 @@ async function input<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
     const { done, value } = await reader.read();
     if (done) break;
     length += value.length;
-    if (length > 4096) {
+    if (length > maximum) {
       await reader.cancel();
       throw new APIError('invalid_request', 400, 'Request is too large.');
     }
@@ -361,6 +363,93 @@ export function registerRoutes(app: App) {
       .bind(nowSeconds(), session.family_id)
       .run();
     return c.body(null, 204);
+  });
+  app.post('/v1/billing/reconcile', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    await limit(c.env, `billing:${session.user_id}`, 12, 3600);
+    await reconcileBilling(c.env, session.user_id);
+    return c.body(null, 204);
+  });
+  app.get('/v1/billing', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const state = await c.env.DB.prepare(
+      'SELECT plan, entitlement_expires_at, verified_at FROM billing_state WHERE user_id = ?',
+    )
+      .bind(session.user_id)
+      .first<{ plan: string; entitlement_expires_at: number | null; verified_at: number }>();
+    const expired =
+      (state?.entitlement_expires_at ?? 0) <= nowSeconds() ||
+      (state?.verified_at ?? 0) + 86400 <= nowSeconds();
+    return c.json(
+      billingStatusSchema.parse({
+        configured: !!c.env.REVENUECAT_SECRET_KEY,
+        plan: expired ? 'free' : (state?.plan ?? 'free'),
+        expiresAt: state?.entitlement_expires_at ?? null,
+        verifiedAt: state?.verified_at ?? null,
+      }),
+    );
+  });
+  app.post('/v1/billing/revenuecat/webhook', async (c) => {
+    requireLive(c.env);
+    requireBillingConfiguration(c.env);
+    if (
+      !c.env.REVENUECAT_WEBHOOK_AUTH ||
+      c.env.REVENUECAT_WEBHOOK_AUTH.length < 32 ||
+      !c.env.REVENUECAT_APP_ID
+    )
+      throw new APIError('configuration_error', 503, 'Subscription webhook is not configured.');
+    // Compare fixed-size digests without an early mismatch branch.
+    const received = await hash(c.req.header('Authorization') ?? '');
+    const expected = await hash(c.env.REVENUECAT_WEBHOOK_AUTH);
+    let different = 0;
+    for (let i = 0; i < expected.length; i++)
+      different |= expected.charCodeAt(i) ^ received.charCodeAt(i);
+    if (different) throw new APIError('unauthorised', 401, 'Webhook authentication failed.');
+    const body = await input(
+      c.req.raw,
+      z.object({
+        event: z.object({
+          id: z.string().min(1).max(128),
+          type: z.string().min(1).max(80),
+          app_id: z.string(),
+          environment: z.enum(['SANDBOX', 'PRODUCTION']).optional(),
+          app_user_id: z.string().max(256).optional(),
+          transferred_from: z.array(z.string().max(256)).max(50).optional(),
+          transferred_to: z.array(z.string().max(256)).max(50).optional(),
+        }),
+      }),
+      16384,
+    );
+    const event = body.event;
+    if (
+      event.app_id !== c.env.REVENUECAT_APP_ID ||
+      (event.type !== 'TEST' && event.environment !== 'SANDBOX')
+    )
+      throw new APIError('forbidden', 403, 'Webhook app or store environment is not enabled.');
+    if (
+      await c.env.DB.prepare('SELECT id FROM processed_billing_events WHERE id = ?')
+        .bind(event.id)
+        .first()
+    )
+      return c.json({ received: true });
+    // Events trigger a fresh server lookup rather than granting from the event
+    // payload. Duplicate/delayed/cancel/refund/transfer events share one path.
+    const identifiers = new Set([
+      event.app_user_id,
+      ...(event.transferred_from ?? []),
+      ...(event.transferred_to ?? []),
+    ]);
+    for (const userId of identifiers) {
+      if (!userId || !z.uuid().safeParse(userId).success) continue;
+      if (await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first())
+        await reconcileBilling(c.env, userId);
+    }
+    await c.env.DB.prepare(
+      'INSERT INTO processed_billing_events (id, processed_at) VALUES (?, ?) ON CONFLICT(id) DO NOTHING',
+    )
+      .bind(event.id, nowSeconds())
+      .run();
+    return c.json({ received: true });
   });
   app.get('/v1/sessions', async (c) => {
     const session = await authenticate(c.req.raw, c.env);

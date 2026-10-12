@@ -78,6 +78,10 @@ async function main() {
     XON_API_KEY: source.XON_API_KEY.trim(),
     CLOUDFLARE_EMAIL_API_TOKEN: source.CLOUDFLARE_EMAIL_TOKEN.trim(),
   };
+  for (const name of ['REVENUECAT_SECRET_KEY', 'REVENUECAT_WEBHOOK_AUTH', 'REVENUECAT_APP_ID']) {
+    const value = source[name]?.trim() || secrets[name]?.trim();
+    if (value) runtime[name] = value;
+  }
   await writeFile(
     secretsPath,
     `${Object.entries(runtime)

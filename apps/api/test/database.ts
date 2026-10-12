@@ -14,6 +14,7 @@ export function testDatabase() {
     '0005_remediation_steps.sql',
     '0006_multiple_addresses.sql',
     '0007_monitoring.sql',
+    '0008_billing.sql',
   ]) {
     db.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
   }

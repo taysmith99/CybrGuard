@@ -21,11 +21,11 @@ Real mailbox delivery, verification, signed-in session persistence and the paid 
 
 ## M2 — subscriptions and premium details
 
-RevenueCat/StoreKit products, localised prices/trial terms, restore purchases, authenticated idempotent webhooks and entitlement reconciliation. Server-enforced quotas/downgrades, independently verified additional addresses, billing-backed entitlement reconciliation. Detailed findings and remediation are implemented with server gating and staging test grants; paid purchases are not connected.
+RevenueCat/StoreKit products, localised prices/trial terms, restore purchases, authenticated idempotent webhooks and entitlement reconciliation. Server-enforced quotas/downgrades, independently verified additional addresses, billing-backed entitlement reconciliation. Detailed findings and remediation are implemented with server gating and staging test grants; Purchase/restore adapters, localised offerings, authenticated idempotent webhooks and server reconciliation are implemented. Apple enrollment, live products and RevenueCat account configuration remain release gates; see BILLING.md.
 
 ## M3 — monitoring and notifications
 
-Cron + Queues, configurable daily cadence, purchased-rate-limit-aware scheduling, deduplication and retries, initial historical baseline, and APNs consent/device revocation. Discreet alerts only for newly observed findings. These are not live today.
+Cron + Queues, configurable daily cadence, purchased-rate-limit-aware scheduling, deduplication and retries, initial historical baseline, and APNs consent/device revocation. Discreet alerts only for newly observed findings. Daily opt-in Cron/Queue checking is deployed to staging and verified locally end to end. APNs delivery remains unavailable.
 
 ## M4 — release readiness
 

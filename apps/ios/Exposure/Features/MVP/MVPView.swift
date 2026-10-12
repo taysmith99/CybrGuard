@@ -37,7 +37,7 @@ struct MVPView: View {
                                 Text("Source: paid XposedOrNot (xonAPI+)").font(.footnote)
                                 if model.account?.tier == "premium" {
                                     NavigationLink("Remediation dashboard") { FindingsView(model: model) }
-                                } else { NavigationLink("Unlock breach details") { SubscriptionView() } }
+                                } else { NavigationLink("Unlock breach details") { SubscriptionView(model: model) } }
                             } else { Text("Your email is verified. Run your first scan to see its known breach count.") }
                             Button(model.isScanning ? "Scanning…" : "Scan verified email") { Task { await model.scan() } }
                                 .disabled(model.isBusy || model.isPaused(address))
@@ -116,7 +116,7 @@ struct MVPView: View {
                             Button("Refresh monitoring status") { Task { await model.reloadMonitoring() } }.disabled(model.isBusy)
                         } else { Text("Sign in and select a verified email first.") }
                         Text("Opt in to checking this verified address with XON about once daily. Existing findings form a historical baseline. Newly observed breaches are flagged in your dashboard; this is not real-time detection.")
-                        NavigationLink("View subscription options") { SubscriptionView() }
+                        NavigationLink("View subscription options") { SubscriptionView(model: model) }
                         errorMessage
                     }
                     Section("Notifications") {
@@ -138,7 +138,7 @@ struct MVPView: View {
                             Button("Sign out") { Task { await model.logout() } }.disabled(model.isBusy)
                             Button("Delete account", role: .destructive) { confirmDeletion = true }.disabled(model.isBusy)
                         } else { Button("Sign in") { showSignIn = true }.disabled(model.isBusy) }
-                        NavigationLink("Subscription") { SubscriptionView() }
+                        NavigationLink("Subscription") { SubscriptionView(model: model) }
                         errorMessage
                     }
                     Section("Privacy and help") {
@@ -153,7 +153,7 @@ struct MVPView: View {
                         }
                         NavigationLink("Terms") {
                             InformationView(title: "Terms", paragraphs: [
-                                "Terms of service require review before launch. Purchases, trials and ongoing monitoring are not currently available.",
+                                "Terms of service require review before launch. Purchases and trials require Apple and RevenueCat configuration. Daily monitoring is available to premium users who opt in.",
                                 "Breach monitoring provides information about known historical exposures. It cannot prevent breaches or guarantee that an account is safe."
                             ])
                         }
@@ -313,24 +313,7 @@ private struct VerificationView: View {
     }
 }
 
-private struct SubscriptionView: View {
-    var body: some View {
-        List {
-            Section("Free") { Text("Known breach count for one verified email and basic security guidance.") }
-            Section("Personal") { Text("Planned: up to 3 verified addresses, breach details, monitoring and remediation tracking.") }
-            Section("Family") { Text("Planned: up to 15 independently verified addresses, with each person's consent.") }
-            Section("Purchases unavailable") {
-                Text("Prices, billing periods and trial terms will come from the App Store. Purchases are not connected yet. Premium breach details are available to approved test accounts.")
-                Button("Subscribe") {}.disabled(true)
-                Button("Restore purchases") {}.disabled(true)
-                Link("Manage Apple subscriptions", destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
-            }
-            Section { Text("Sign-in, free access and account deletion do not require a purchase.") }
-        }.navigationTitle("Subscription")
-    }
-}
-
-private struct InformationView: View {
+struct InformationView: View {
     let title: String
     let paragraphs: [String]
     var body: some View {
