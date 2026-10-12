@@ -1,11 +1,13 @@
 import { type ErrorResponse, environmentSchema, healthResponseSchema } from '@cybrguard/contracts';
 import { Hono } from 'hono';
+import { consumeMonitoring, type MonitoringMessage, scheduleMonitoring } from './jobs/monitoring';
 import { APIError } from './lib/security';
 import { type EmailConfiguration, requireEmailConfiguration } from './providers/email';
 import { registerRoutes } from './routes';
 
 export type Bindings = EmailConfiguration & {
   DB: D1Database;
+  MONITORING_QUEUE?: Queue<MonitoringMessage>;
   APP_ENV: string;
   DATA_MODE: string;
   STAGING_ALLOWED_EMAILS?: string;
@@ -74,7 +76,10 @@ app.get('/v1/health', async (c) => {
     const version = await c.env.DB.prepare(
       'SELECT version FROM schema_metadata WHERE id = 1',
     ).first<number>('version');
-    if (![1, 2, 3, 4].includes(version ?? 0) || (c.env.DATA_MODE === 'live' && version !== 4))
+    if (
+      ![1, 2, 3, 4, 5, 6, 7].includes(version ?? 0) ||
+      (c.env.DATA_MODE === 'live' && version !== 7)
+    )
       throw new Error('Schema is not ready');
   } catch {
     return c.json(error('database_unavailable', 'Database is not ready.', c.get('requestId')), 503);
@@ -110,4 +115,10 @@ app.onError((cause, c) => {
   );
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  scheduled: async (_controller: ScheduledController, env: Bindings) => {
+    await scheduleMonitoring(env);
+  },
+  queue: consumeMonitoring,
+};

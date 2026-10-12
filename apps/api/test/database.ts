@@ -11,6 +11,9 @@ export function testDatabase() {
     '0002_verified_scan.sql',
     '0003_premium_findings.sql',
     '0004_details_timestamp.sql',
+    '0005_remediation_steps.sql',
+    '0006_multiple_addresses.sql',
+    '0007_monitoring.sql',
   ]) {
     db.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
   }

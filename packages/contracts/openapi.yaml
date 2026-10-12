@@ -475,6 +475,14 @@
               "properties":
                 "remediated":
                   "type": "boolean"
+  "/v1/addresses/verify/start": {"post":{"summary":"Start independent additional-email verification","responses":{"400":{"description":"Invalid request or code","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Sign-in required or session expired","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Rate limited; Retry-After contains seconds","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Configuration, email or provider unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"202":{"description":"Success","content":{"application/json":{"schema":{"$ref":"#/components/schemas/VerificationChallenge"}}}},"403":{"description":"Premium or remaining quota required"}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/AuthStart"}}}},"security":[{"bearerAuth":[],"deviceId":[]}]}}
+  "/v1/addresses/verify/complete": {"post":{"summary":"Complete independent additional-email verification","responses":{"400":{"description":"Invalid request or code","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Sign-in required or session expired","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"429":{"description":"Rate limited; Retry-After contains seconds","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Configuration, email or provider unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"201":{"description":"Success","content":{"application/json":{"schema":{"$ref":"#/components/schemas/AddressSummary"}}}},"403":{"description":"Premium or remaining quota required"}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/AuthVerify"}}}},"security":[{"bearerAuth":[],"deviceId":[]}]}}
+  "/v1/addresses/{id}/findings/{findingId}/actions/{actionId}": {"patch":{"summary":"Complete or undo an applicable remediation step","responses":{"200":{"description":"Owned active findings","content":{"application/json":{"schema":{"$ref":"#/components/schemas/FindingsResponse"}}}},"400":{"description":"Invalid request","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"401":{"description":"Sign-in required","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"403":{"description":"Premium access required","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"404":{"description":"Address or finding not owned","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},"503":{"description":"Service unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}}},"security":[{"bearerAuth":[],"deviceId":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"findingId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"actionId","in":"path","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["completed"],"properties":{"completed":{"type":"boolean"}}}}}}}}
+  "/v1/addresses/{id}": {"delete":{"summary":"Remove an owned additional address","security":[{"bearerAuth":[],"deviceId":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"204":{"description":"Removed"},"400":{"description":"Primary address cannot be removed"},"401":{"description":"Sign-in required"},"404":{"description":"Not found"}}}}
+  "/v1/sessions/{id}": {"delete":{"summary":"Revoke an owned login session family","security":[{"bearerAuth":[],"deviceId":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"204":{"description":"Removed"},"400":{"description":"Primary address cannot be removed"},"401":{"description":"Sign-in required"},"404":{"description":"Not found"}}}}
+  "/v1/sessions/revoke-others": {"post":{"summary":"Revoke other account sessions","security":[{"bearerAuth":[],"deviceId":[]}],"responses":{"204":{"description":"Revoked"},"401":{"description":"Sign-in required"}}}}
+  "/v1/sessions": {"get":{"summary":"List active account login families","security":[{"bearerAuth":[],"deviceId":[]}],"responses":{"200":{"description":"Active sessions","content":{"application/json":{"schema":{"type":"object","required":["sessions"],"properties":{"sessions":{"type":"array","items":{"type":"object","required":["id","current","expiresAt"],"properties":{"id":{"type":"string","format":"uuid"},"current":{"type":"boolean"},"expiresAt":{"type":"integer"}}}}}}}}},"401":{"description":"Sign-in required"}}}}
+  "/v1/addresses/{id}/monitoring": {"get":{"security":[{"bearerAuth":[],"deviceId":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"summary":"Read owned address monitoring status","responses":{"200":{"description":"Monitoring status","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MonitoringStatus"}}}},"401":{"description":"Sign-in required"},"404":{"description":"Not owned"}}},"patch":{"security":[{"bearerAuth":[],"deviceId":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"summary":"Enable or disable daily monitoring","responses":{"204":{"description":"Preference saved"},"403":{"description":"Active premium quota required to enable"},"503":{"description":"Queue unavailable"},"401":{"description":"Sign-in required"},"404":{"description":"Not owned"}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["enabled"],"properties":{"enabled":{"type":"boolean"}}}}}}}}
 "components":
   "securitySchemes":
     "bearerAuth":
@@ -583,7 +591,7 @@
     "AddressSummary":
       "type": "object"
       "additionalProperties": false
-      "required": ["id", "email", "verified", "knownBreachCount", "checkedAt"]
+      "required": ["id", "email", "verified", "isPrimary", "knownBreachCount", "checkedAt"]
       "properties":
         "id":
           "type": "string"
@@ -592,6 +600,7 @@
           "type": "string"
           "format": "email"
           "maxLength": 254
+        "isPrimary": {"type": "boolean"}
         "verified":
           "const": true
         "knownBreachCount":
@@ -603,13 +612,14 @@
     "AddressList":
       "type": "object"
       "additionalProperties": false
-      "required": ["addresses"]
+      "required": ["addresses", "quota"]
       "properties":
         "addresses":
           "type": "array"
           "items":
             "$ref": "#/components/schemas/AddressSummary"
-          "maxItems": 1
+          "maxItems": 25
+        "quota": {"type": "integer", "minimum": 1, "maximum": 25}
     "Account":
       "type": "object"
       "additionalProperties": false
@@ -620,19 +630,19 @@
           "format": "uuid"
         "tier":
           "enum": ["free", "premium"]
-        "quota":
-          "const": 1
+        "quota": {"type": "integer", "minimum": 1, "maximum": 25}
         "address":
           "$ref": "#/components/schemas/AddressSummary"
 
     "Finding":
       "type": "object"
       "additionalProperties": false
-      "required": ["id", "breachId", "breachedAt", "domain", "exposedData", "passwordRisk", "passwordRiskHighlighted", "description", "firstSeenAt", "lastSeenAt", "remediatedAt"]
+      "required": ["id", "breachId", "breachedAt", "domain", "exposedData", "passwordRisk", "passwordRiskHighlighted", "description", "firstSeenAt", "lastSeenAt", "remediatedAt", "remediationSteps", "isNew"]
       "properties":
         "id":
           "type": "string"
           "format": "uuid"
+        "isNew": {"type": "boolean"}
         "breachId":
           "type": "string"
         "breachedAt":
@@ -656,6 +666,7 @@
         "lastSeenAt":
           "type": "string"
           "format": "date-time"
+        "remediationSteps": {"type": "array", "items": {"$ref": "#/components/schemas/RemediationStep"}}
         "remediatedAt":
           "type": ["string", "null"]
           "format": "date-time"
@@ -671,3 +682,6 @@
         "checkedAt":
           "type": ["string", "null"]
           "format": "date-time"
+
+    "RemediationStep": {"type": "object", "additionalProperties": false, "required": ["id", "title", "detail", "completedAt"], "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "detail": {"type": "string"}, "completedAt": {"type": ["string", "null"], "format": "date-time"}}}
+    "MonitoringStatus": {"type":"object","additionalProperties":false,"required":["enabled","paused","cadenceHours","lastCheckedAt","nextCheckAt","outcome","pushAvailable"],"properties":{"enabled":{"type":"boolean"},"paused":{"type":"boolean"},"cadenceHours":{"const":24},"lastCheckedAt":{"type":["string","null"],"format":"date-time"},"nextCheckAt":{"type":["integer","null"]},"outcome":{"type":["string","null"]},"pushAvailable":{"const":false}}}

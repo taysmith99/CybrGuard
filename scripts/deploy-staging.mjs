@@ -95,6 +95,12 @@ async function main() {
   if (!config.env.staging.d1_databases[0].database_id)
     throw new Error('Cloudflare did not return a D1 identifier.');
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const formatting = spawnSync(
+    fileURLToPath(new URL('node_modules/.bin/biome', root)),
+    ['format', '--write', fileURLToPath(configPath)],
+    { cwd: fileURLToPath(root), stdio: 'ignore' },
+  );
+  if (formatting.status !== 0) throw new Error('Staging configuration formatting failed.');
 
   function wrangler(args) {
     const result = spawnSync(fileURLToPath(new URL('node_modules/.bin/wrangler', root)), args, {
@@ -110,6 +116,12 @@ async function main() {
     });
     if (result.status !== 0)
       throw new Error('Wrangler stopped; staging deployment is not confirmed.');
+  }
+  const queues = await api(`/accounts/${account}/queues?per_page=100`);
+  const queueName = 'cybrguard-monitoring-staging';
+  if (!queues.some((queue) => queue.queue_name === queueName)) {
+    await api(`/accounts/${account}/queues`, 'POST', { queue_name: queueName });
+    console.log('Created isolated staging monitoring queue.');
   }
   wrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--env', 'staging']);
   wrangler(['deploy', '--env', 'staging', '--secrets-file', fileURLToPath(secretsPath)]);

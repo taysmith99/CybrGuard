@@ -119,3 +119,28 @@ private actor FindingsTransport: HTTPTransport {
     #expect(result.findings.first?.passwordRiskHighlighted == true)
     #expect(result.findings.first?.remediatedAt != nil)
 }
+
+@Test func additionalAddressVerificationUsesAuthenticatedPurposeRoute() async throws {
+    let transport = CaptureTransport()
+    let config = try APIConfiguration(baseURL: "http://localhost:8788", environment: .development, isDebugBuild: true)
+    let client = ScanClient(configuration: config, transport: transport)
+    let credentials = SessionCredentials(accessToken: String(repeating: "a", count: 64), refreshToken: String(repeating: "b", count: 64), expiresAt: 1)
+    _ = try await client.startAddress(email: "consented@example.com", credentials: credentials, deviceId: String(repeating: "c", count: 64))
+    let request = try #require(await transport.captured())
+    #expect(request.url?.path == "/v1/addresses/verify/start")
+    #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(credentials.accessToken)")
+    #expect(request.value(forHTTPHeaderField: "X-Device-ID") == String(repeating: "c", count: 64))
+    let body = try #require(request.httpBody)
+    let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    #expect(payload["consent"] as? Bool == true)
+    #expect(payload["email"] as? String == "consented@example.com")
+}
+
+@Test func addressListPreservesPrimaryAndPausedAddressOrder() throws {
+    let body = #"{"quota":1,"addresses":[{"id":"primary","email":"primary@example.com","verified":true,"isPrimary":true,"knownBreachCount":0,"checkedAt":null},{"id":"secondary","email":"secondary@example.com","verified":true,"isPrimary":false,"knownBreachCount":null,"checkedAt":null}]}"#
+    let result = try JSONDecoder().decode(AddressList.self, from: Data(body.utf8))
+    #expect(result.quota == 1)
+    #expect(result.addresses.map(\.id) == ["primary", "secondary"])
+    #expect(result.addresses[0].isPrimary == true)
+    #expect(result.addresses[1].isPrimary == false)
+}

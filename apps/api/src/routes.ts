@@ -1,17 +1,29 @@
 import {
   accountResponseSchema,
+  addressListSchema,
   addressSummarySchema,
   authRefreshSchema,
   authStartSchema,
   authVerifySchema,
   deviceCredentialSchema,
+  monitoringResponseSchema,
+  monitoringUpdateSchema,
   remediationSchema,
+  remediationStepUpdateSchema,
+  sessionListSchema,
   sessionResponseSchema,
   verificationResponseSchema,
 } from '@cybrguard/contracts';
 import type { z } from 'zod';
 import type { app as application, Bindings } from './index';
-import { hasPremium, readFindings, requirePremium } from './lib/findings';
+import {
+  addressQuota,
+  hasPremium,
+  readFindings,
+  requireAddressSlot,
+  requirePremium,
+} from './lib/findings';
+import { scanAddress } from './lib/scan';
 import {
   APIError,
   decrypt,
@@ -22,7 +34,6 @@ import {
   verificationCode,
 } from './lib/security';
 import { requireEmailConfiguration, sendVerificationEmail } from './providers/email';
-import { XonProvider } from './providers/xon';
 
 type App = typeof application;
 const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -133,22 +144,29 @@ const tokenResponse = (token: Awaited<ReturnType<typeof tokens>>) => ({
   expiresAt: token.accessExpiresAt,
 });
 
-async function account(env: Bindings, userId: string) {
+async function account(env: Bindings, userId: string, addressId?: string) {
   const row = await env.DB.prepare(
-    'SELECT id, encrypted_email, known_breach_count, checked_at FROM monitored_emails WHERE user_id = ?',
+    `SELECT id, encrypted_email, known_breach_count, checked_at, is_primary FROM monitored_emails WHERE user_id = ? AND ${addressId ? 'id = ?' : 'is_primary = 1'}`,
   )
-    .bind(userId)
+    .bind(...(addressId ? [userId, addressId] : [userId]))
     .first<{
       id: string;
       encrypted_email: string;
+      is_primary: number;
       known_breach_count: number | null;
       checked_at: string | null;
     }>();
-  if (!row) throw new APIError('unauthorised', 401, 'This account is no longer available.');
+  if (!row)
+    throw new APIError(
+      addressId ? 'not_found' : 'unauthorised',
+      addressId ? 404 : 401,
+      addressId ? 'Address not found.' : 'This account is no longer available.',
+    );
   return {
     id: row.id,
     email: await decrypt(env.DATA_ENCRYPTION_KEY as string, row.encrypted_email),
     verified: true,
+    isPrimary: row.is_primary === 1,
     knownBreachCount: row.known_breach_count,
     checkedAt: row.checked_at,
   };
@@ -231,7 +249,7 @@ export function registerRoutes(app: App) {
     const now = nowSeconds();
     // Reserving each attempt atomically makes concurrent guesses share one five-attempt budget.
     const challenge = await c.env.DB.prepare(
-      `UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ? AND device_hash = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < 5 RETURNING *`,
+      `UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ? AND device_hash = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < 5 AND purpose = 'login' AND user_id IS NULL RETURNING *`,
     )
       .bind(body.challengeId, deviceHash, now)
       .first<{
@@ -265,7 +283,7 @@ export function registerRoutes(app: App) {
         'INSERT INTO users (id, created_at) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM monitored_emails WHERE email_index = ?)',
       ).bind(userId, now, challenge.email_index),
       c.env.DB.prepare(
-        `INSERT INTO monitored_emails (id, user_id, encrypted_email, email_index, verified_at, consent_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?) ON CONFLICT(email_index) DO UPDATE SET consent_at = excluded.consent_at`,
+        `INSERT INTO monitored_emails (id, user_id, encrypted_email, email_index, verified_at, consent_at, is_primary) SELECT ?, ?, ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM users WHERE id = ?) ON CONFLICT(email_index) DO UPDATE SET consent_at = excluded.consent_at`,
       ).bind(
         addressId,
         userId,
@@ -280,7 +298,7 @@ export function registerRoutes(app: App) {
         challenge.email_index,
       ),
       c.env.DB.prepare(
-        'INSERT INTO sessions (id, user_id, family_id, access_hash, refresh_hash, device_hash, access_expires_at, refresh_expires_at) SELECT ?, user_id, ?, ?, ?, ?, ?, ? FROM monitored_emails WHERE email_index = ?',
+        'INSERT INTO sessions (id, user_id, family_id, access_hash, refresh_hash, device_hash, access_expires_at, refresh_expires_at) SELECT ?, user_id, ?, ?, ?, ?, ?, ? FROM monitored_emails WHERE email_index = ? AND is_primary = 1',
       ).bind(
         token.id,
         token.family,
@@ -292,6 +310,8 @@ export function registerRoutes(app: App) {
         challenge.email_index,
       ),
     ]);
+    if (!(await c.env.DB.prepare('SELECT id FROM sessions WHERE id = ?').bind(token.id).first()))
+      throw new APIError('invalid_code', 400, 'Use your primary sign-in email for this account.');
     return c.json(sessionResponseSchema.parse(tokenResponse(token)));
   });
 
@@ -342,6 +362,42 @@ export function registerRoutes(app: App) {
       .run();
     return c.body(null, 204);
   });
+  app.get('/v1/sessions', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const rows =
+      await c.env.DB.prepare(`SELECT family_id, MAX(refresh_expires_at) AS expires_at FROM sessions
+      WHERE user_id = ? AND revoked_at IS NULL AND refresh_expires_at > ? GROUP BY family_id ORDER BY family_id`)
+        .bind(session.user_id, nowSeconds())
+        .all<{ family_id: string; expires_at: number }>();
+    return c.json(
+      sessionListSchema.parse({
+        sessions: rows.results.map((row) => ({
+          id: row.family_id,
+          current: row.family_id === session.family_id,
+          expiresAt: row.expires_at,
+        })),
+      }),
+    );
+  });
+  app.post('/v1/sessions/revoke-others', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    await c.env.DB.prepare(
+      'UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND family_id != ? AND revoked_at IS NULL',
+    )
+      .bind(nowSeconds(), session.user_id, session.family_id)
+      .run();
+    return c.body(null, 204);
+  });
+  app.delete('/v1/sessions/:id', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const revoked = await c.env.DB.prepare(
+      'UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND family_id = ? AND revoked_at IS NULL RETURNING id',
+    )
+      .bind(nowSeconds(), session.user_id, c.req.param('id'))
+      .first();
+    if (!revoked) throw new APIError('not_found', 404, 'Session not found.');
+    return c.body(null, 204);
+  });
   app.get('/v1/me', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
     const address = await account(c.env, session.user_id);
@@ -349,144 +405,306 @@ export function registerRoutes(app: App) {
       accountResponseSchema.parse({
         userId: session.user_id,
         tier: (await hasPremium(c.env, session.user_id, address.email)) ? 'premium' : 'free',
-        quota: 1,
+        quota: await addressQuota(c.env, session.user_id, address.email),
         address,
       }),
     );
   });
   app.get('/v1/addresses', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    return c.json({ addresses: [await account(c.env, session.user_id)] });
+    const primary = await account(c.env, session.user_id);
+    const rows = await c.env.DB.prepare(
+      'SELECT id FROM monitored_emails WHERE user_id = ? ORDER BY is_primary DESC, verified_at, id',
+    )
+      .bind(session.user_id)
+      .all<{ id: string }>();
+    return c.json(
+      addressListSchema.parse({
+        addresses: await Promise.all(
+          rows.results.map((row) => account(c.env, session.user_id, row.id)),
+        ),
+        quota: await addressQuota(c.env, session.user_id, primary.email),
+      }),
+    );
+  });
+  app.post('/v1/addresses/verify/start', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    requireEmailConfiguration(c.env);
+    const body = await input(c.req.raw, authStartSchema);
+    if ((await hash(body.deviceId)) !== session.device_hash)
+      throw new APIError('unauthorised', 401, 'Use the signed-in device.');
+    const primary = await account(c.env, session.user_id);
+    await requirePremium(c.env, session.user_id, primary.email);
+    const quota = await addressQuota(c.env, session.user_id, primary.email);
+    const count = await c.env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM monitored_emails WHERE user_id = ?',
+    )
+      .bind(session.user_id)
+      .first<number>('count');
+    if ((count ?? 0) >= quota)
+      throw new APIError('subscription_required', 403, 'Your address quota is full.');
+    const key = c.env.EMAIL_BLIND_INDEX_KEY as string;
+    const index = await keyedHash(key, body.email);
+    const ipHash = await keyedHash(key, c.req.header('CF-Connecting-IP') ?? 'local');
+    await limit(c.env, `send-ip:${ipHash}`, 20, 3600);
+    await limit(c.env, `send-device:${session.device_hash}`, 10, 3600);
+    await limit(c.env, `send-email:${index}`, 5, 3600);
+    await limit(c.env, `send-minute:${index}`, 1, 60);
+    const challengeId = crypto.randomUUID();
+    const code = verificationCode();
+    const now = nowSeconds();
+    const saved = await c.env.DB.prepare(`INSERT INTO email_verifications
+      (id, email_index, encrypted_email, code_hash, device_hash, consent_at, created_at, expires_at, purpose, user_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'address', id FROM users WHERE id = ?`)
+      .bind(
+        challengeId,
+        index,
+        await encrypt(c.env.DATA_ENCRYPTION_KEY as string, body.email),
+        await keyedHash(key, `${challengeId}:${code}`),
+        session.device_hash,
+        now,
+        now,
+        now + 600,
+        session.user_id,
+      )
+      .run();
+    if (!saved.meta.changes) throw new APIError('unauthorised', 401, 'Sign in again.');
+    try {
+      await sendVerificationEmail(c.env, body.email, code);
+    } catch (error) {
+      await c.env.DB.prepare('DELETE FROM email_verifications WHERE id = ?')
+        .bind(challengeId)
+        .run();
+      throw error;
+    }
+    return c.json(
+      verificationResponseSchema.parse({
+        challengeId,
+        expiresIn: 600,
+        message: 'If delivery is available, a verification code will arrive shortly.',
+      }),
+      202,
+    );
+  });
+  app.post('/v1/addresses/verify/complete', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const body = await input(c.req.raw, authVerifySchema);
+    if ((await hash(body.deviceId)) !== session.device_hash)
+      throw new APIError('unauthorised', 401, 'Use the signed-in device.');
+    await limit(c.env, `verify:${session.device_hash}`, 30, 3600);
+    const primary = await account(c.env, session.user_id);
+    await requirePremium(c.env, session.user_id, primary.email);
+    const quota = await addressQuota(c.env, session.user_id, primary.email);
+    const now = nowSeconds();
+    const challenge = await c.env.DB.prepare(`UPDATE email_verifications SET attempts = attempts + 1
+      WHERE id = ? AND user_id = ? AND purpose = 'address' AND device_hash = ?
+      AND consumed_at IS NULL AND expires_at > ? AND attempts < 5 RETURNING *`)
+      .bind(body.challengeId, session.user_id, session.device_hash, now)
+      .first<{
+        code_hash: string;
+        email_index: string;
+        encrypted_email: string;
+        consent_at: number;
+      }>();
+    const codeHash = await keyedHash(
+      c.env.EMAIL_BLIND_INDEX_KEY as string,
+      `${body.challengeId}:${body.code}`,
+    );
+    if (!challenge || challenge.code_hash !== codeHash)
+      throw new APIError('invalid_code', 400, 'The code is incorrect, expired or already used.');
+    const addressId = crypto.randomUUID();
+    // Both statements run in a single transaction. A unique consumed marker binds
+    // this insertion to this redemption, while COUNT enforces concurrent quotas.
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE email_verifications SET consumed_at = ? WHERE id = ? AND user_id = ?
+        AND consumed_at IS NULL AND expires_at > ? AND code_hash = ?`).bind(
+        now,
+        body.challengeId,
+        session.user_id,
+        now,
+        codeHash,
+      ),
+      c.env.DB.prepare(`INSERT INTO monitored_emails
+        (id, user_id, encrypted_email, email_index, verified_at, consent_at, is_primary)
+        SELECT ?, ?, ?, ?, ?, ?, 0 WHERE changes() = 1
+        AND EXISTS (SELECT 1 FROM users WHERE id = ?)
+        AND (SELECT COUNT(*) FROM monitored_emails WHERE user_id = ?) < ?
+        ON CONFLICT(email_index) DO NOTHING`).bind(
+        addressId,
+        session.user_id,
+        challenge.encrypted_email,
+        challenge.email_index,
+        now,
+        challenge.consent_at,
+        session.user_id,
+        session.user_id,
+        quota,
+      ),
+    ]);
+    if (!results[0]?.meta.changes)
+      throw new APIError('invalid_code', 400, 'The code is incorrect, expired or already used.');
+    if (!results[1]?.meta.changes)
+      throw new APIError(
+        'invalid_request',
+        400,
+        'The address could not be added. Check your quota or use another address.',
+      );
+    return c.json(
+      addressSummarySchema.parse(await account(c.env, session.user_id, addressId)),
+      201,
+    );
+  });
+  app.delete('/v1/addresses/:id', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
+    if (address.isPrimary)
+      throw new APIError(
+        'invalid_request',
+        400,
+        'Your primary address belongs to your account. Use account deletion to remove it.',
+      );
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        'DELETE FROM email_verifications WHERE user_id = ? AND email_index = ?',
+      ).bind(
+        session.user_id,
+        await keyedHash(c.env.EMAIL_BLIND_INDEX_KEY as string, address.email),
+      ),
+      c.env.DB.prepare(
+        'DELETE FROM monitored_emails WHERE id = ? AND user_id = ? AND is_primary = 0',
+      ).bind(address.id, session.user_id),
+    ]);
+    return c.body(null, 204);
+  });
+  app.get('/v1/addresses/:id/monitoring', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
+    const row = await c.env.DB.prepare(
+      `SELECT monitoring_enabled, last_monitoring_at, next_check_at, last_monitoring_outcome FROM monitored_emails WHERE id = ? AND user_id = ?`,
+    )
+      .bind(address.id, session.user_id)
+      .first<{
+        monitoring_enabled: number;
+        last_monitoring_at: string | null;
+        next_check_at: number | null;
+        last_monitoring_outcome: string | null;
+      }>();
+    let paused = !(await hasPremium(c.env, session.user_id, address.email));
+    if (!paused) {
+      try {
+        await requireAddressSlot(c.env, session.user_id, address.id, address.email);
+      } catch (error) {
+        if (error instanceof APIError && error.code === 'subscription_required') paused = true;
+        else throw error;
+      }
+    }
+    return c.json(
+      monitoringResponseSchema.parse({
+        enabled: row?.monitoring_enabled === 1,
+        paused,
+        cadenceHours: 24,
+        lastCheckedAt: row?.last_monitoring_at ?? null,
+        nextCheckAt: row?.next_check_at ?? null,
+        outcome: row?.last_monitoring_outcome ?? null,
+        pushAvailable: false,
+      }),
+    );
+  });
+  app.patch('/v1/addresses/:id/monitoring', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
+    const body = await input(c.req.raw, monitoringUpdateSchema);
+    if (body.enabled) {
+      if (!c.env.MONITORING_QUEUE)
+        throw new APIError('configuration_error', 503, 'Scheduled monitoring is not configured.');
+      await requirePremium(c.env, session.user_id, address.email);
+      await requireAddressSlot(c.env, session.user_id, address.id, address.email);
+    }
+    await c.env.DB.prepare(`UPDATE monitored_emails SET monitoring_enabled = ?, monitoring_generation = monitoring_generation + 1,
+      next_check_at = ?, last_monitoring_outcome = ? WHERE id = ? AND user_id = ? AND monitoring_enabled != ?`)
+      .bind(
+        body.enabled ? 1 : 0,
+        body.enabled ? nowSeconds() : null,
+        body.enabled ? 'pending' : 'disabled',
+        address.id,
+        session.user_id,
+        body.enabled ? 1 : 0,
+      )
+      .run();
+    return c.body(null, 204);
   });
   app.get('/v1/addresses/:id/summary', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    const address = await account(c.env, session.user_id);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
     if (address.id !== c.req.param('id'))
       throw new APIError('not_found', 404, 'Address not found.');
     return c.json(addressSummarySchema.parse(address));
   });
   app.get('/v1/addresses/:id/findings', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    const address = await account(c.env, session.user_id);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
     if (address.id !== c.req.param('id'))
       throw new APIError('not_found', 404, 'Address not found.');
     await requirePremium(c.env, session.user_id, address.email);
+    await requireAddressSlot(c.env, session.user_id, address.id, address.email);
     return c.json(await readFindings(c.env, address.id));
   });
   app.patch('/v1/addresses/:id/findings/:findingId', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    const address = await account(c.env, session.user_id);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
     if (address.id !== c.req.param('id'))
       throw new APIError('not_found', 404, 'Address not found.');
     await requirePremium(c.env, session.user_id, address.email);
+    await requireAddressSlot(c.env, session.user_id, address.id, address.email);
     const body = await input(c.req.raw, remediationSchema);
     const saved = await c.env.DB.prepare(
-      'UPDATE findings SET remediated_at = CASE WHEN ? = 1 THEN COALESCE(remediated_at, ?) ELSE NULL END WHERE id = ? AND address_id = ? AND active = 1 RETURNING id',
+      'UPDATE findings SET is_new = 0, remediated_at = CASE WHEN ? = 1 THEN COALESCE(remediated_at, ?) ELSE NULL END WHERE id = ? AND address_id = ? AND active = 1 RETURNING id',
     )
       .bind(body.remediated ? 1 : 0, new Date().toISOString(), c.req.param('findingId'), address.id)
       .first();
     if (!saved) throw new APIError('not_found', 404, 'Finding not found.');
     return c.json(await readFindings(c.env, address.id));
   });
-  app.post('/v1/addresses/:id/scan', async (c) => {
+  app.patch('/v1/addresses/:id/findings/:findingId/actions/:actionId', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    const address = await account(c.env, session.user_id);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
     if (address.id !== c.req.param('id'))
       throw new APIError('not_found', 404, 'Address not found.');
-    const now = nowSeconds();
-    const locked = await c.env.DB.prepare(
-      'UPDATE monitored_emails SET scan_lease_until = ?, last_scan_attempt = ? WHERE id = ? AND user_id = ? AND scan_lease_until <= ? AND last_scan_attempt <= ? RETURNING id',
-    )
-      .bind(now + 45, now, address.id, session.user_id, now, now - 60)
-      .first();
-    if (!locked)
-      throw new APIError(
-        'rate_limited',
-        429,
-        'A scan is in progress or was just requested. Wait a minute before trying again.',
-        60,
-      );
-    try {
-      const slot = await c.env.DB.prepare(
-        'UPDATE rate_limits SET window_start = ? WHERE key = ? AND window_start <= ? RETURNING key',
-      )
-        .bind(Date.now() + 1500, 'xon-global', Date.now())
-        .first();
-      if (!slot)
-        throw new APIError('rate_limited', 429, 'Another scan is running. Try again shortly.', 2);
-      const result = await new XonProvider(c.env.XON_API_KEY as string).checkVerifiedEmail(
-        address.email,
-        await hasPremium(c.env, session.user_id, address.email),
-      );
-      const statements = [
-        c.env.DB.prepare(
-          'UPDATE monitored_emails SET known_breach_count = ?, checked_at = ? WHERE id = ? AND user_id = ?',
-        ).bind(result.knownBreachCount, result.checkedAt, address.id, session.user_id),
-      ];
-      if (result.findings) {
-        statements.push(
-          c.env.DB.prepare('UPDATE monitored_emails SET details_checked_at = ? WHERE id = ?').bind(
-            result.checkedAt,
-            address.id,
-          ),
-        );
-        statements.push(
-          c.env.DB.prepare('UPDATE findings SET active = 0 WHERE address_id = ?').bind(address.id),
-        );
-        for (const finding of result.findings) {
-          statements.push(
-            c.env.DB.prepare(`INSERT INTO findings (id, address_id, breach_index, encrypted_details, first_seen_at, last_seen_at)
-            SELECT ?, id, ?, ?, ?, ? FROM monitored_emails WHERE id = ? AND user_id = ?
-            ON CONFLICT(address_id, breach_index) DO UPDATE SET encrypted_details = excluded.encrypted_details, last_seen_at = excluded.last_seen_at, active = 1`).bind(
-              crypto.randomUUID(),
-              await keyedHash(
-                c.env.EMAIL_BLIND_INDEX_KEY as string,
-                `${address.id}:${finding.breachId}`,
-              ),
-              await encrypt(c.env.DATA_ENCRYPTION_KEY as string, JSON.stringify(finding)),
-              result.checkedAt,
-              result.checkedAt,
-              address.id,
-              session.user_id,
-            ),
-          );
-        }
-      }
-      const saved = await c.env.DB.batch(statements);
-      if (!saved[0]?.meta.changes)
-        throw new APIError('unauthorised', 401, 'This account is no longer available.');
-      return c.json(
-        addressSummarySchema.parse({
-          ...address,
-          checkedAt: result.checkedAt,
-          knownBreachCount: result.knownBreachCount,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof APIError && error.code === 'provider_rate_limited')
-        await c.env.DB.prepare(
-          'UPDATE rate_limits SET window_start = MAX(window_start, ?) WHERE key = ?',
+    await requirePremium(c.env, session.user_id, address.email);
+    await requireAddressSlot(c.env, session.user_id, address.id, address.email);
+    const body = await input(c.req.raw, remediationStepUpdateSchema);
+    const findings = await readFindings(c.env, address.id);
+    const finding = findings.findings.find((item) => item.id === c.req.param('findingId'));
+    if (!finding?.remediationSteps.some((step) => step.id === c.req.param('actionId')))
+      throw new APIError('not_found', 404, 'Action not found.');
+    const saved =
+      await c.env.DB.prepare(`INSERT INTO finding_actions (finding_id, action_id, completed_at)
+      SELECT id, ?, ? FROM findings WHERE id = ? AND address_id = ? AND active = 1
+      ON CONFLICT(finding_id, action_id) DO UPDATE SET completed_at = CASE WHEN excluded.completed_at IS NULL THEN NULL ELSE COALESCE(finding_actions.completed_at, excluded.completed_at) END RETURNING finding_id`)
+        .bind(
+          c.req.param('actionId'),
+          body.completed ? new Date().toISOString() : null,
+          finding.id,
+          address.id,
         )
-          .bind(Date.now() + (error.retryAfter ?? 60) * 1000, 'xon-global')
-          .run();
-      throw error;
-    } finally {
-      await c.env.DB.prepare('UPDATE monitored_emails SET scan_lease_until = 0 WHERE id = ?')
-        .bind(address.id)
-        .run();
-    }
+        .first();
+    if (!saved) throw new APIError('not_found', 404, 'Finding not found.');
+    return c.json(await readFindings(c.env, address.id));
+  });
+  app.post('/v1/addresses/:id/scan', async (c) => {
+    const session = await authenticate(c.req.raw, c.env);
+    const address = await account(c.env, session.user_id, c.req.param('id'));
+    if (address.id !== c.req.param('id'))
+      throw new APIError('not_found', 404, 'Address not found.');
+    await requireAddressSlot(c.env, session.user_id, address.id, address.email);
+    return c.json(await scanAddress(c.env, session.user_id, address));
   });
   app.delete('/v1/me', async (c) => {
     const session = await authenticate(c.req.raw, c.env);
-    const address = await c.env.DB.prepare(
-      'SELECT email_index FROM monitored_emails WHERE user_id = ?',
-    )
-      .bind(session.user_id)
-      .first<{ email_index: string }>();
     await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM email_verifications WHERE email_index = ?').bind(
-        address?.email_index ?? '',
-      ),
+      c.env.DB.prepare(
+        'DELETE FROM email_verifications WHERE email_index IN (SELECT email_index FROM monitored_emails WHERE user_id = ?) OR user_id = ?',
+      ).bind(session.user_id, session.user_id),
       c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(session.user_id),
     ]);
     return c.body(null, 204);

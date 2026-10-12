@@ -59,3 +59,11 @@ Verified deployment checks: trusted HTTPS health 200, no-store and HSTS headers,
 `STAGING_PREMIUM_EMAILS` in ignored `.env.staging` is uploaded as a Worker secret. It grants verified tester accounts access to detailed scans only in staging. It does not skip OTP ownership checks. A new scan is required to populate details from count-only history. The development simulator tester has a seven-day local entitlement for testing; production remains disabled and no payment is implied. Future authenticated billing reconciliation must populate/expire `premium_entitlements` before purchases can be offered. No client premium flag is accepted.
 
 Findings are matched by an address-specific keyed breach index and stored as AES-GCM encrypted metadata. Remediation timestamps survive refreshes, rescans and disappearing/reappearing records; deletion cascades all finding and entitlement rows. Marking a finding remediated cannot verify a password change or erase a historical exposure.
+
+## Daily monitoring
+
+Staging deployment creates/reuses the isolated `cybrguard-monitoring-staging` queue; the deployment token needs Queues Read/Edit as well as Workers/D1 permissions. Wrangler binds its producer and consumer to the API Worker, consumer concurrency one, batch size one, ten queue retries, plus the application-level limit of eight durable scan attempts. The `*/15 * * * *` Cron dispatches opted-in due addresses; the per-address cadence is 24 hours. Production remains blocked.
+
+Local testing: run `npm run dev --workspace @cybrguard/api -- --test-scheduled`, enable monitoring in the simulator, then `curl 'http://localhost:8788/__scheduled?cron=%2A%2F15%20%2A%20%2A%20%2A%20%2A'`. This invokes local Cron and the local Queue; it uses the real configured provider and independently verified addresses. Disable monitoring after a temporary test. The test endpoint is Wrangler-local, not a deployed API route.
+
+Inspect D1 `monitoring_jobs` status/attempts/outcome and `monitored_emails.last_monitoring_at`, `next_check_at`, `last_monitoring_outcome` for operational health, using only aggregate queries in shared logs. Failed jobs do not clear prior results; provider 429 extends the global backoff. Job records contain opaque address IDs, not email plaintext. Push and email breach alerts are not sent by this milestone.

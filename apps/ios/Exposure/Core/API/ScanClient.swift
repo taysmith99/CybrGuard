@@ -15,8 +15,33 @@ public struct AddressSummary: Decodable, Sendable, Equatable {
     public let id: String
     public let email: String
     public let verified: Bool
+    public let isPrimary: Bool?
     public let knownBreachCount: Int?
     public let checkedAt: String?
+}
+
+public struct MonitoringStatus: Decodable, Sendable {
+    public let enabled: Bool
+    public let paused: Bool
+    public let cadenceHours: Int
+    public let lastCheckedAt: String?
+    public let nextCheckAt: Int?
+    public let outcome: String?
+    public let pushAvailable: Bool
+}
+
+public struct ActiveSession: Decodable, Sendable, Identifiable {
+    public let id: String
+    public let current: Bool
+    public let expiresAt: Int
+}
+public struct ActiveSessionList: Decodable, Sendable {
+    public let sessions: [ActiveSession]
+}
+
+public struct AddressList: Decodable, Sendable {
+    public let addresses: [AddressSummary]
+    public let quota: Int
 }
 
 public struct AccountResponse: Decodable, Sendable {
@@ -26,8 +51,16 @@ public struct AccountResponse: Decodable, Sendable {
     public var address: AddressSummary
 }
 
+public struct RemediationStep: Decodable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let title: String
+    public let detail: String
+    public let completedAt: String?
+}
+
 public struct BreachFinding: Decodable, Sendable, Identifiable, Equatable {
     public let id: String
+    public let isNew: Bool?
     public let breachId: String
     public let breachedAt: String?
     public let domain: String?
@@ -38,6 +71,7 @@ public struct BreachFinding: Decodable, Sendable, Identifiable, Equatable {
     public let firstSeenAt: String
     public let lastSeenAt: String
     public let remediatedAt: String?
+    public let remediationSteps: [RemediationStep]?
 }
 
 public struct FindingsResponse: Decodable, Sendable {
@@ -91,6 +125,23 @@ public struct ScanClient: Sendable {
         try await json(path: "me", method: "GET", credentials: credentials, deviceId: deviceId)
     }
 
+    public func addresses(_ credentials: SessionCredentials, deviceId: String) async throws -> AddressList {
+        try await json(path: "addresses", method: "GET", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func startAddress(email: String, credentials: SessionCredentials, deviceId: String) async throws -> VerificationChallenge {
+        try await json(path: "addresses/verify/start", body: ["email": .string(email), "deviceId": .string(deviceId), "consent": .bool(true)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func verifyAddress(challengeId: String, code: String, credentials: SessionCredentials, deviceId: String) async throws -> AddressSummary {
+        try await json(path: "addresses/verify/complete", body: ["challengeId": .string(challengeId), "code": .string(code), "deviceId": .string(deviceId)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func removeAddress(id: String, credentials: SessionCredentials, deviceId: String) async throws {
+        guard UUID(uuidString: id) != nil else { throw ScanClientError.invalidResponse }
+        _ = try await request(path: "addresses/\(id)", method: "DELETE", credentials: credentials, deviceId: deviceId)
+    }
+
     public func scan(addressId: String, credentials: SessionCredentials, deviceId: String) async throws -> AddressSummary {
         guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
         return try await json(path: "addresses/\(addressId)/scan", credentials: credentials, deviceId: deviceId)
@@ -104,6 +155,34 @@ public struct ScanClient: Sendable {
     public func remediate(addressId: String, findingId: String, remediated: Bool, credentials: SessionCredentials, deviceId: String) async throws -> FindingsResponse {
         guard UUID(uuidString: addressId) != nil, UUID(uuidString: findingId) != nil else { throw ScanClientError.invalidResponse }
         return try await json(path: "addresses/\(addressId)/findings/\(findingId)", method: "PATCH", body: ["remediated": .bool(remediated)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func completeAction(addressId: String, findingId: String, actionId: String, completed: Bool, credentials: SessionCredentials, deviceId: String) async throws -> FindingsResponse {
+        guard UUID(uuidString: addressId) != nil, UUID(uuidString: findingId) != nil, actionId.range(of: "^[a-z-]+$", options: .regularExpression) != nil else { throw ScanClientError.invalidResponse }
+        return try await json(path: "addresses/\(addressId)/findings/\(findingId)/actions/\(actionId)", method: "PATCH", body: ["completed": .bool(completed)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func monitoring(addressId: String, credentials: SessionCredentials, deviceId: String) async throws -> MonitoringStatus {
+        guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
+        return try await json(path: "addresses/\(addressId)/monitoring", method: "GET", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func setMonitoring(addressId: String, enabled: Bool, credentials: SessionCredentials, deviceId: String) async throws {
+        guard UUID(uuidString: addressId) != nil else { throw ScanClientError.invalidResponse }
+        _ = try await request(path: "addresses/\(addressId)/monitoring", method: "PATCH", body: ["enabled": .bool(enabled)], credentials: credentials, deviceId: deviceId)
+    }
+
+    public func sessions(_ credentials: SessionCredentials, deviceId: String) async throws -> ActiveSessionList {
+        try await json(path: "sessions", method: "GET", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func revokeOtherSessions(_ credentials: SessionCredentials, deviceId: String) async throws {
+        _ = try await request(path: "sessions/revoke-others", credentials: credentials, deviceId: deviceId)
+    }
+
+    public func revokeSession(id: String, credentials: SessionCredentials, deviceId: String) async throws {
+        guard UUID(uuidString: id) != nil else { throw ScanClientError.invalidResponse }
+        _ = try await request(path: "sessions/\(id)", method: "DELETE", credentials: credentials, deviceId: deviceId)
     }
 
     public func logout(_ credentials: SessionCredentials, deviceId: String) async throws {

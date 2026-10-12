@@ -1,10 +1,12 @@
 import {
   accountResponseSchema,
   addressSummarySchema,
+  findingsResponseSchema,
   sessionResponseSchema,
 } from '@cybrguard/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app, type Bindings } from '../src/index';
+import { processMonitoring, scheduleMonitoring } from '../src/jobs/monitoring';
 import { hasPremium } from '../src/lib/findings';
 import { parseXonCount, parseXonDetails, XonProvider } from '../src/providers/xon';
 import { testDatabase } from './database';
@@ -15,6 +17,7 @@ let database: ReturnType<typeof testDatabase>;
 let env: Bindings;
 let deliveredCode = '';
 let providerCalls = 0;
+let providerBreaches: string[] = [];
 let providerStatus = 200;
 let corruptResponse = false;
 let failEmail = false;
@@ -61,6 +64,7 @@ beforeEach(() => {
   database = testDatabase();
   deliveredCode = '';
   providerCalls = 0;
+  providerBreaches = ['FictionalTestBreach', 'FictionalTestBreachTwo'];
   providerStatus = 200;
   corruptResponse = false;
   failEmail = false;
@@ -99,7 +103,7 @@ beforeEach(() => {
         email: corruptResponse ? 'different@example.com' : requestedEmail,
         breaches:
           new URL(url).searchParams.get('detailed') === 'true'
-            ? ['FictionalTestBreach', 'FictionalTestBreachTwo'].map((id, i) => ({
+            ? providerBreaches.map((id, i) => ({
                 breach_id: id,
                 breached_date: '2020-01-01T00:00:00+00:00',
                 domain: null,
@@ -107,7 +111,7 @@ beforeEach(() => {
                 xposed_data: i === 0 ? 'Email addresses;Passwords' : 'Email addresses',
                 xposure_desc: null,
               }))
-            : ['FictionalTestBreach', 'FictionalTestBreachTwo'],
+            : providerBreaches,
       });
     }),
   );
@@ -118,7 +122,443 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('scheduled monitoring', () => {
+  async function setup() {
+    const session = await signIn();
+    const user = await me(session.accessToken);
+    database.raw
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
+      .run(user.userId, Math.floor(clock / 1000) + 10 * 86400);
+    const jobs: string[] = [];
+    env.MONITORING_QUEUE = {
+      send: async (message: { jobId: string }) => {
+        jobs.push(message.jobId);
+      },
+    } as unknown as Queue<{ jobId: string }>;
+    const patch = (enabled: boolean) =>
+      app.request(
+        `/v1/addresses/${user.address.id}/monitoring`,
+        {
+          ...auth(session.accessToken),
+          method: 'PATCH',
+          body: JSON.stringify({ enabled }),
+        },
+        env,
+      );
+    expect((await patch(true)).status).toBe(204);
+    return { session, user, jobs, patch };
+  }
+  it('baselines historical findings, flags only newly observed IDs and deduplicates repeated delivery', async () => {
+    const { user, jobs } = await setup();
+    await scheduleMonitoring(env);
+    await scheduleMonitoring(env);
+    expect(jobs).toHaveLength(1);
+    const firstJob = jobs[0] as string;
+    await processMonitoring(env, firstJob);
+    expect(database.raw.prepare('SELECT SUM(is_new) AS count FROM findings').get()?.count).toBe(0);
+    await processMonitoring(env, firstJob);
+    expect(providerCalls).toBe(1);
+    advance(86401);
+    providerBreaches.push('FictionalNewBreach');
+    await scheduleMonitoring(env);
+    await processMonitoring(env, jobs[1] as string);
+    expect(database.raw.prepare('SELECT SUM(is_new) AS count FROM findings').get()?.count).toBe(1);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM findings').get()?.count).toBe(3);
+    advance(86401);
+    await scheduleMonitoring(env);
+    await processMonitoring(env, jobs[2] as string);
+    expect(database.raw.prepare('SELECT SUM(is_new) AS count FROM findings').get()?.count).toBe(1);
+    expect(
+      database.raw
+        .prepare('SELECT last_monitoring_outcome FROM monitored_emails WHERE id = ?')
+        .get(user.address.id)?.last_monitoring_outcome,
+    ).toBe('success');
+  });
+  it('preserves successful results on failure, retries and stops after eight attempts', async () => {
+    const { jobs } = await setup();
+    await scheduleMonitoring(env);
+    await processMonitoring(env, jobs[0] as string);
+    advance(86401);
+    await scheduleMonitoring(env);
+    providerStatus = 503;
+    for (let i = 0; i < 7; i++) {
+      await expect(processMonitoring(env, jobs[1] as string)).rejects.toBeDefined();
+      advance(61);
+    }
+    await processMonitoring(env, jobs[1] as string);
+    expect(
+      database.raw
+        .prepare('SELECT status, attempts FROM monitoring_jobs WHERE id = ?')
+        .get(jobs[1] as string),
+    ).toMatchObject({ status: 'failed', attempts: 8 });
+    expect(
+      database.raw.prepare('SELECT known_breach_count FROM monitored_emails').get()
+        ?.known_breach_count,
+    ).toBe(2);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM findings').get()?.count).toBe(2);
+  });
+  it('ignores disabled/deleted addresses and pauses expired entitlements without provider calls', async () => {
+    const { user, jobs, patch } = await setup();
+    await scheduleMonitoring(env);
+    expect((await patch(false)).status).toBe(204);
+    await processMonitoring(env, jobs[0] as string);
+    expect(providerCalls).toBe(0);
+    expect((await patch(true)).status).toBe(204);
+    await scheduleMonitoring(env);
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    await processMonitoring(env, jobs[1] as string);
+    expect(providerCalls).toBe(0);
+    database.raw.prepare('DELETE FROM users WHERE id = ?').run(user.userId);
+    await processMonitoring(env, jobs[1] as string);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM monitoring_jobs').get()?.count).toBe(
+      0,
+    );
+  });
+  it('keeps monitoring opt-in, enforces ownership and allows disabling after expiry', async () => {
+    const { session, user, patch } = await setup();
+    let response = await app.request(
+      `/v1/addresses/${user.address.id}/monitoring`,
+      auth(session.accessToken),
+      env,
+    );
+    expect(await response.json()).toMatchObject({
+      enabled: true,
+      cadenceHours: 24,
+      pushAvailable: false,
+      paused: false,
+    });
+    const other = await signIn('other@example.com', 'e'.repeat(64));
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${user.address.id}/monitoring`,
+          auth(other.accessToken, 'e'.repeat(64)),
+          env,
+        )
+      ).status,
+    ).toBe(404);
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    expect((await patch(false)).status).toBe(204);
+    expect((await patch(true)).status).toBe(403);
+    response = await app.request(
+      `/v1/addresses/${user.address.id}/monitoring`,
+      auth(session.accessToken),
+      env,
+    );
+    expect(await response.json()).toMatchObject({
+      enabled: false,
+      paused: true,
+      nextCheckAt: null,
+    });
+  });
+  it('discards in-flight results if monitoring is disabled during the provider request', async () => {
+    const { user, jobs } = await setup();
+    await scheduleMonitoring(env);
+    const original = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementationOnce(async (...args) => {
+      database.raw
+        .prepare(
+          'UPDATE monitored_emails SET monitoring_enabled = 0, monitoring_generation = monitoring_generation + 1 WHERE id = ?',
+        )
+        .run(user.address.id);
+      if (!original) throw new Error('Missing fixture');
+      return original(...args);
+    });
+    await processMonitoring(env, jobs[0] as string);
+    expect(
+      database.raw.prepare('SELECT known_breach_count FROM monitored_emails').get()
+        ?.known_breach_count,
+    ).toBe(null);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM findings').get()?.count).toBe(0);
+  });
+});
+
+describe('session management', () => {
+  it('lists active families, revokes other devices, and rejects their access and refresh', async () => {
+    const first = await signIn();
+    advance(61);
+    const second = await signIn(email, 'e'.repeat(64));
+    const response = await app.request('/v1/sessions', auth(first.accessToken), env);
+    const list = (await response.json()) as { sessions: { id: string; current: boolean }[] };
+    expect(list.sessions).toHaveLength(2);
+    expect(list.sessions.filter((s) => s.current)).toHaveLength(1);
+    expect((await post('/v1/sessions/revoke-others', {}, first.accessToken)).status).toBe(204);
+    expect(
+      (await app.request('/v1/me', auth(second.accessToken, 'e'.repeat(64)), env)).status,
+    ).toBe(401);
+    expect(
+      (
+        await post('/v1/auth/refresh', {
+          refreshToken: second.refreshToken,
+          deviceId: 'e'.repeat(64),
+        })
+      ).status,
+    ).toBe(401);
+    expect((await app.request('/v1/me', auth(first.accessToken), env)).status).toBe(200);
+  });
+  it('does not allow another account to revoke a session family', async () => {
+    const first = await signIn();
+    const second = await signIn('other@example.com', 'e'.repeat(64));
+    const list = (await (
+      await app.request('/v1/sessions', auth(first.accessToken), env)
+    ).json()) as { sessions: { id: string }[] };
+    const id = list.sessions[0]?.id;
+    expect(
+      (
+        await app.request(
+          `/v1/sessions/${id}`,
+          { ...auth(second.accessToken, 'e'.repeat(64)), method: 'DELETE' },
+          env,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await app.request(
+          `/v1/sessions/${id}`,
+          { ...auth(first.accessToken), method: 'DELETE' },
+          env,
+        )
+      ).status,
+    ).toBe(204);
+    expect((await app.request('/v1/me', auth(first.accessToken), env)).status).toBe(401);
+  });
+});
+
+describe('additional verified addresses', () => {
+  async function premium(quota = 3) {
+    const session = await signIn();
+    const user = await me(session.accessToken);
+    database.raw
+      .prepare(
+        'INSERT INTO premium_entitlements (user_id, expires_at, max_addresses) VALUES (?, ?, ?)',
+      )
+      .run(user.userId, Math.floor(clock / 1000) + 86400, quota);
+    return { ...session, user };
+  }
+  async function challenge(token: string, address: string) {
+    const response = await post(
+      '/v1/addresses/verify/start',
+      { email: address, consent: true, deviceId: device },
+      token,
+    );
+    expect(response.status).toBe(202);
+    return {
+      challengeId: ((await response.json()) as { challengeId: string }).challengeId,
+      code: deliveredCode,
+      deviceId: device,
+    };
+  }
+  it('requires independent verification, preserves primary login, and supports removal', async () => {
+    const session = await premium();
+    const proof = await challenge(session.accessToken, 'second@example.com');
+    expect(providerCalls).toBe(0);
+    expect((await post('/v1/auth/verify', proof)).status).toBe(400);
+    const added = await post('/v1/addresses/verify/complete', proof, session.accessToken);
+    expect(added.status).toBe(201);
+    const address = addressSummarySchema.parse(await added.json());
+    expect(address.isPrimary).toBe(false);
+    expect((await post('/v1/addresses/verify/complete', proof, session.accessToken)).status).toBe(
+      400,
+    );
+    expect((await me(session.accessToken)).address.id).toBe(session.user.address.id);
+    advance(61);
+    const login = await start('second@example.com');
+    expect(
+      (await post('/v1/auth/verify', { challengeId: login, code: deliveredCode, deviceId: device }))
+        .status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${address.id}`,
+          { ...auth(session.accessToken), method: 'DELETE' },
+          env,
+        )
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${session.user.address.id}`,
+          { ...auth(session.accessToken), method: 'DELETE' },
+          env,
+        )
+      ).status,
+    ).toBe(400);
+  });
+  it('enforces quota across concurrent completions and pauses excess on downgrade', async () => {
+    const session = await premium(2);
+    const first = await challenge(session.accessToken, 'first@example.com');
+    const second = await challenge(session.accessToken, 'second@example.com');
+    const results = await Promise.all(
+      [first, second].map((proof) =>
+        post('/v1/addresses/verify/complete', proof, session.accessToken),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 400]);
+    const address = addressSummarySchema.parse(await results.find((r) => r.status === 201)?.json());
+    expect(
+      (
+        await post(
+          '/v1/addresses/verify/start',
+          { email: 'third@example.com', consent: true, deviceId: device },
+          session.accessToken,
+        )
+      ).status,
+    ).toBe(403);
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    expect((await post(`/v1/addresses/${address.id}/scan`, {}, session.accessToken)).status).toBe(
+      403,
+    );
+    expect((await me(session.accessToken)).quota).toBe(1);
+    expect(
+      (
+        await app.request(
+          `/v1/addresses/${address.id}`,
+          { ...auth(session.accessToken), method: 'DELETE' },
+          env,
+        )
+      ).status,
+    ).toBe(204);
+  });
+  it('binds challenges to the account, device, consent and expiry', async () => {
+    const session = await premium();
+    const proof = await challenge(session.accessToken, 'second@example.com');
+    const other = await signIn('other@example.com', 'd'.repeat(64));
+    expect(
+      (await post('/v1/addresses/verify/complete', proof, other.accessToken, 'd'.repeat(64)))
+        .status,
+    ).toBe(401);
+    expect(
+      (
+        await post(
+          '/v1/addresses/verify/start',
+          { email: 'no@example.com', consent: false, deviceId: device },
+          session.accessToken,
+        )
+      ).status,
+    ).toBe(400);
+    advance(601);
+    expect((await post('/v1/addresses/verify/complete', proof, session.accessToken)).status).toBe(
+      400,
+    );
+    expect(providerCalls).toBe(0);
+  });
+  it('rejects another account on the same device without consuming the owner challenge', async () => {
+    const session = await premium();
+    const proof = await challenge(session.accessToken, 'second@example.com');
+    const other = await signIn('other@example.com');
+    const otherAccount = await me(other.accessToken);
+    database.raw
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
+      .run(otherAccount.userId, Math.floor(clock / 1000) + 86400);
+    expect((await post('/v1/addresses/verify/complete', proof, other.accessToken)).status).toBe(
+      400,
+    );
+    expect((await post('/v1/addresses/verify/complete', proof, session.accessToken)).status).toBe(
+      201,
+    );
+  });
+  it('shares a five-attempt budget and cannot reclaim an email belonging to another account', async () => {
+    const session = await premium();
+    const proof = await challenge(session.accessToken, 'second@example.com');
+    const wrong = { ...proof, code: proof.code === '000000' ? '111111' : '000000' };
+    for (let attempt = 0; attempt < 5; attempt++)
+      expect((await post('/v1/addresses/verify/complete', wrong, session.accessToken)).status).toBe(
+        400,
+      );
+    expect((await post('/v1/addresses/verify/complete', proof, session.accessToken)).status).toBe(
+      400,
+    );
+    await signIn('other@example.com');
+    advance(61);
+    const occupied = await challenge(session.accessToken, 'other@example.com');
+    expect(
+      (await post('/v1/addresses/verify/complete', occupied, session.accessToken)).status,
+    ).toBe(400);
+    expect(
+      database.raw.prepare('SELECT COUNT(*) AS count FROM monitored_emails').get()?.count,
+    ).toBe(2);
+  });
+  it('cascades pending account-bound challenges when the account is deleted', async () => {
+    const session = await premium();
+    await challenge(session.accessToken, 'second@example.com');
+    expect(
+      (await app.request('/v1/me', { ...auth(session.accessToken), method: 'DELETE' }, env)).status,
+    ).toBe(204);
+    expect(
+      database.raw.prepare('SELECT COUNT(*) AS count FROM email_verifications').get()?.count,
+    ).toBe(0);
+  });
+  it('requires premium and authentication before sending additional codes', async () => {
+    const session = await signIn();
+    const body = { email: 'second@example.com', consent: true, deviceId: device };
+    expect((await post('/v1/addresses/verify/start', body)).status).toBe(401);
+    expect((await post('/v1/addresses/verify/start', body, session.accessToken)).status).toBe(403);
+  });
+});
+
 describe('verified paid scan flow (offline fictional provider and email)', () => {
+  it('persists individual action progress without claiming remediation, preserves it on rescan, and cascades deletion', async () => {
+    const session = await signIn();
+    const owner = await me(session.accessToken);
+    database.raw
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
+      .run(owner.userId, Math.floor(clock / 1000) + 1000);
+    await post(`/v1/addresses/${owner.address.id}/scan`, {}, session.accessToken);
+    const list = async () =>
+      findingsResponseSchema.parse(
+        await (
+          await app.request(
+            `/v1/addresses/${owner.address.id}/findings`,
+            auth(session.accessToken),
+            env,
+          )
+        ).json(),
+      );
+    const first = (await list()).findings[0];
+    if (!first) throw new Error('Expected finding');
+    expect(first.remediationSteps.map((step) => step.id)).toContain('change-password');
+    const update = (completed: boolean, actionId = 'change-password') =>
+      app.request(
+        `/v1/addresses/${owner.address.id}/findings/${first.id}/actions/${actionId}`,
+        {
+          method: 'PATCH',
+          headers: { ...auth(session.accessToken).headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed }),
+        },
+        env,
+      );
+    expect((await update(true)).status).toBe(200);
+    const marked = (await list()).findings[0]?.remediationSteps.find(
+      (step) => step.id === 'change-password',
+    )?.completedAt;
+    expect(marked).toBeTruthy();
+    expect((await list()).findings[0]?.remediatedAt).toBeNull();
+    advance(61);
+    await post(`/v1/addresses/${owner.address.id}/scan`, {}, session.accessToken);
+    expect((await update(true)).status).toBe(200);
+    expect(
+      (await list()).findings[0]?.remediationSteps.find((step) => step.id === 'change-password')
+        ?.completedAt,
+    ).toBe(marked);
+    expect((await update(false)).status).toBe(200);
+    expect(
+      (await list()).findings[0]?.remediationSteps.find((step) => step.id === 'change-password')
+        ?.completedAt,
+    ).toBeNull();
+    expect((await update(true, 'invented-action')).status).toBe(404);
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    expect((await update(true)).status).toBe(403);
+    expect(
+      (await app.request('/v1/me', { ...auth(session.accessToken), method: 'DELETE' }, env)).status,
+    ).toBe(204);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM finding_actions').get()?.count).toBe(
+      0,
+    );
+  });
+
   it('limits staging premium overrides to the configured staging testers', async () => {
     const session = await signIn();
     const account = await me(session.accessToken);
@@ -126,7 +566,7 @@ describe('verified paid scan flow (offline fictional provider and email)', () =>
     expect(await hasPremium(env, account.userId, email)).toBe(false);
     env.APP_ENV = 'staging';
     expect(await hasPremium(env, account.userId, email)).toBe(true);
-    expect(await hasPremium(env, account.userId, 'another@example.com')).toBe(false);
+    expect(await hasPremium(env, 'another-user', 'another@example.com')).toBe(false);
     env.APP_ENV = 'production';
     expect(await hasPremium(env, account.userId, email)).toBe(false);
   });
@@ -134,7 +574,7 @@ describe('verified paid scan flow (offline fictional provider and email)', () =>
     const session = await signIn();
     const owner = await me(session.accessToken);
     database.raw
-      .prepare('INSERT INTO premium_entitlements VALUES (?, ?)')
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
       .run(owner.userId, Math.floor(clock / 1000) + 1000);
     expect(
       (await post(`/v1/addresses/${owner.address.id}/scan`, {}, session.accessToken)).status,
@@ -144,7 +584,7 @@ describe('verified paid scan flow (offline fictional provider and email)', () =>
     const attacker = await signIn('another@example.com', 'e'.repeat(64));
     const other = await me(attacker.accessToken, 'e'.repeat(64));
     database.raw
-      .prepare('INSERT INTO premium_entitlements VALUES (?, ?)')
+      .prepare('INSERT INTO premium_entitlements (user_id, expires_at) VALUES (?, ?)')
       .run(other.userId, Math.floor(clock / 1000) + 1000);
     expect(
       (

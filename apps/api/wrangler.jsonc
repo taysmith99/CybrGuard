@@ -50,7 +50,49 @@
           "database_id": "699a6bb1-4991-4d7e-9bc3-5104697b9a61",
           "migrations_dir": "migrations"
         }
-      ]
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "MONITORING_QUEUE",
+            "queue": "cybrguard-monitoring-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "cybrguard-monitoring-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_retries": 10,
+            "max_concurrency": 1,
+            "retry_delay": 60
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *"]
+      }
     }
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "MONITORING_QUEUE",
+        "queue": "cybrguard-monitoring-local"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cybrguard-monitoring-local",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "max_concurrency": 1,
+        "retry_delay": 60
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
   }
 }

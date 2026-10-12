@@ -6,6 +6,8 @@ struct MVPView: View {
     let configuration: Result<APIConfiguration, Error>
     @State private var model: ScanModel
     @State private var showSignIn = false
+    @State private var showAddAddress = false
+    @State private var removingAddress: AddressSummary?
     @State private var confirmDeletion = false
 
     init(brandName: String, configuration: Result<APIConfiguration, Error>) {
@@ -24,7 +26,7 @@ struct MVPView: View {
                         if !model.isSignedIn { Button("Get started / Sign in") { showSignIn = true } }
                     }
                     Section("Your results") {
-                        if let address = model.account?.address {
+                        if let address = model.selectedAddress {
                             Text(address.email)
                             if let count = address.knownBreachCount {
                                 LabeledContent("Known breaches", value: String(count))
@@ -34,11 +36,12 @@ struct MVPView: View {
                                 }
                                 Text("Source: paid XposedOrNot (xonAPI+)").font(.footnote)
                                 if model.account?.tier == "premium" {
-                                    NavigationLink("Breach details and remediation") { FindingsView(model: model) }
+                                    NavigationLink("Remediation dashboard") { FindingsView(model: model) }
                                 } else { NavigationLink("Unlock breach details") { SubscriptionView() } }
                             } else { Text("Your email is verified. Run your first scan to see its known breach count.") }
                             Button(model.isScanning ? "Scanning…" : "Scan verified email") { Task { await model.scan() } }
-                                .disabled(model.isBusy)
+                                .disabled(model.isBusy || model.isPaused(address))
+                            if model.isPaused(address) { Text("This address is paused above your current plan quota.") }
                             if model.isScanning { ProgressView("Querying breach provider…") }
                         } else if model.isSignedIn {
                             Text("Your account could not be loaded.")
@@ -62,8 +65,23 @@ struct MVPView: View {
                 List {
                     Section("Verified addresses") {
                         if let account = model.account {
-                            LabeledContent(account.address.email, value: "Verified")
-                            Text("\(account.quota) address allowed on your \(account.tier) plan.")
+                            ForEach(model.addresses, id: \.id) { address in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Button { model.selectAddress(address) } label: {
+                                        Label(address.email, systemImage: model.selectedAddress?.id == address.id ? "checkmark.circle.fill" : "circle")
+                                    }.disabled(model.isBusy)
+                                    Text(address.isPrimary == true ? "Primary sign-in email" : "Verified additional email").font(.caption)
+                                    if model.isPaused(address) { Text("Paused — above plan quota").font(.caption) }
+                                    if address.isPrimary != true {
+                                        Button("Remove address", role: .destructive) { removingAddress = address }.disabled(model.isBusy)
+                                    }
+                                }.buttonStyle(.borderless)
+                            }
+                            Text("\(model.addresses.count) of \(account.quota) addresses on your \(account.tier) plan.")
+                            Button("Add an email address") { showAddAddress = true }
+                                .disabled(model.isBusy || account.tier != "premium" || model.addresses.count >= account.quota)
+                            Button("Refresh addresses") { Task { await model.reloadAccount() } }.disabled(model.isBusy)
+                            errorMessage
                         } else {
                             Text("Sign in to verify your first address.")
                             Button("Verify an email address") { showSignIn = true }.disabled(model.isBusy || model.isSignedIn)
@@ -79,16 +97,34 @@ struct MVPView: View {
 
             NavigationStack {
                 List {
-                    Section("Monitoring") {
-                        LabeledContent("Status", value: "Not active")
-                        Text("Scheduled monitoring and notifications are not connected yet. Manual scans query the paid XON service after email verification.")
+                    Section("Daily monitoring") {
+                        if let address = model.selectedAddress {
+                            Text(address.email)
+                            if let status = model.monitoring {
+                                LabeledContent("Status", value: status.paused ? "Paused by plan" : status.enabled ? "Enabled" : "Disabled")
+                                if let last = status.lastCheckedAt { Text("Last successful check: \(displayDate(last))") }
+                                if let next = status.nextCheckAt, status.enabled && !status.paused {
+                                    Text("Next check due: \(Date(timeIntervalSince1970: Double(next)).formatted(date: .abbreviated, time: .shortened))")
+                                }
+                                if let outcome = status.outcome, outcome != "success", outcome != "disabled", outcome != "pending" {
+                                    Text("Last check did not complete. The backend retries temporary failures; your previous results remain available.")
+                                }
+                                Button(status.enabled ? "Disable daily monitoring" : "Enable daily monitoring") {
+                                    Task { await model.setMonitoring(enabled: !status.enabled) }
+                                }.disabled(model.isBusy || (!status.enabled && (model.account?.tier != "premium" || model.isPaused(address))))
+                            }
+                            Button("Refresh monitoring status") { Task { await model.reloadMonitoring() } }.disabled(model.isBusy)
+                        } else { Text("Sign in and select a verified email first.") }
+                        Text("Opt in to checking this verified address with XON about once daily. Existing findings form a historical baseline. Newly observed breaches are flagged in your dashboard; this is not real-time detection.")
                         NavigationLink("View subscription options") { SubscriptionView() }
+                        errorMessage
                     }
                     Section("Notifications") {
                         Text("Push delivery is not configured. When available, alerts will say “New security finding — open the app to review.”")
                     }
                 }
                 .navigationTitle("Monitoring")
+                .task(id: model.selectedAddress?.id) { await model.reloadMonitoring() }
             }
             .tabItem { Label("Monitoring", systemImage: "bell") }
 
@@ -98,6 +134,7 @@ struct MVPView: View {
                         LabeledContent("Status", value: model.isSignedIn ? "Signed in" : "Signed out")
                         if let account = model.account { Text(account.address.email) }
                         if model.isSignedIn {
+                            NavigationLink("Signed-in devices and sessions") { SessionsView(model: model) }
                             Button("Sign out") { Task { await model.logout() } }.disabled(model.isBusy)
                             Button("Delete account", role: .destructive) { confirmDeletion = true }.disabled(model.isBusy)
                         } else { Button("Sign in") { showSignIn = true }.disabled(model.isBusy) }
@@ -105,6 +142,7 @@ struct MVPView: View {
                         errorMessage
                     }
                     Section("Privacy and help") {
+                        Link("Email support", destination: URL(string: "mailto:security@cybrguard.app?subject=CybrGuard%20support")!)
                         NavigationLink("Privacy") {
                             InformationView(title: "Privacy", paragraphs: [
                                 "Cloudflare Email Service receives your email to deliver a one-time verification code. After you verify and consent, the backend sends the verified address to the paid XposedOrNot (xonAPI+) service.",
@@ -139,6 +177,12 @@ struct MVPView: View {
         }
         .task { await model.restore() }
         .sheet(isPresented: $showSignIn, onDismiss: { model.cancelVerification() }) { SignInView(model: model) }
+        .sheet(isPresented: $showAddAddress, onDismiss: { model.cancelAddressVerification() }) { SignInView(model: model, additional: true) }
+        .confirmationDialog("Remove this address and its stored findings?", isPresented: Binding(get: { removingAddress != nil }, set: { if !$0 { removingAddress = nil } }), titleVisibility: .visible) {
+            if let address = removingAddress {
+                Button("Remove address", role: .destructive) { Task { await model.removeAddress(address); removingAddress = nil } }
+            }
+        }
         .confirmationDialog("Delete your CybrGuard account and stored data?", isPresented: $confirmDeletion, titleVisibility: .visible) {
             Button("Delete account permanently", role: .destructive) { Task { await model.deleteAccount() } }
         } message: { Text("Your email, findings, remediation marks, scan count and sessions will be removed. Historical breach records at XON will remain.") }
@@ -155,9 +199,40 @@ struct MVPView: View {
     }
 }
 
+private struct SessionsView: View {
+    let model: ScanModel
+    @State private var confirmOthers = false
+    var body: some View {
+        List {
+            Section("Active sign-ins") {
+                ForEach(model.sessions) { session in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(session.current ? "This session" : "Another signed-in session")
+                        Text("Expires \(Date(timeIntervalSince1970: Double(session.expiresAt)).formatted(date: .abbreviated, time: .shortened))").font(.caption)
+                        Text("Session \(session.id.prefix(8))").font(.caption).foregroundStyle(.secondary)
+                        if !session.current {
+                            Button("Sign out this session", role: .destructive) { Task { await model.revokeSession(session) } }.disabled(model.isBusy)
+                        }
+                    }.buttonStyle(.borderless)
+                }
+                Button("Refresh sessions") { Task { await model.reloadSessions() } }.disabled(model.isBusy)
+                Button("Sign out all other sessions", role: .destructive) { confirmOthers = true }.disabled(model.isBusy || model.sessions.count < 2)
+                if let message = model.message { Text(message).foregroundStyle(.red) }
+            }
+            Text("Each sign-in creates a separate session. Device names and locations are not collected.")
+        }
+        .navigationTitle("Signed-in sessions")
+        .task { await model.reloadSessions() }
+        .confirmationDialog("Sign out all other sessions?", isPresented: $confirmOthers, titleVisibility: .visible) {
+            Button("Sign out other sessions", role: .destructive) { Task { await model.revokeOtherSessions() } }
+        }
+    }
+}
+
 private struct SignInView: View {
     @Environment(\.dismiss) private var dismiss
     let model: ScanModel
+    var additional = false
     @State private var email = ""
     @State private var consent = false
     @State private var showVerification = false
@@ -179,13 +254,13 @@ private struct SignInView: View {
                     Text("Use an address you own or have permission to verify. Results require the one-time code delivered to this mailbox.")
                 }
                 Section {
-                    Toggle("I consent to querying my verified email with XposedOrNot (xonAPI+) for known breaches.", isOn: $consent)
+                    Toggle(additional ? "The mailbox owner consents to verification and breach queries with XposedOrNot (xonAPI+)." : "I consent to querying my verified email with XposedOrNot (xonAPI+) for known breaches.", isOn: $consent)
                     Text("Cloudflare Email Service delivers the verification code. Only after verification will your address be sent to XON.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
                     Button(model.isBusy ? "Sending…" : "Send verification code") {
-                        Task { if await model.start(email: email) { showVerification = true } }
+                        Task { if await (additional ? model.startAddress(email: email) : model.start(email: email)) { showVerification = true } }
                     }.disabled(!validEmail || !consent || model.isBusy)
                     if model.isBusy { ProgressView() }
                     if let message = model.message { Text(message).foregroundStyle(.red) }
@@ -193,16 +268,18 @@ private struct SignInView: View {
             }
             .navigationTitle("Verify your email")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(model.isBusy) } }
-            .navigationDestination(isPresented: $showVerification) { VerificationView(model: model, email: email) }
+            .navigationDestination(isPresented: $showVerification) { VerificationView(model: model, email: email, additional: additional) }
         }
         .interactiveDismissDisabled(model.isBusy)
-        .onChange(of: model.isSignedIn) { _, signedIn in if signedIn { dismiss() } }
+        .onChange(of: model.isSignedIn) { _, signedIn in if signedIn && !additional { dismiss() } }
+        .onChange(of: model.addresses.count) { old, new in if additional && new > old { dismiss() } }
     }
 }
 
 private struct VerificationView: View {
     let model: ScanModel
     let email: String
+    var additional = false
     @State private var code = ""
     @State private var resendAfter = Date().addingTimeInterval(60)
 
@@ -216,12 +293,12 @@ private struct VerificationView: View {
                     .accessibilityLabel("Verification code")
                     .onChange(of: code) { _, value in code = VerificationCode.formatted(value) }
                 Button(model.isBusy ? "Verifying…" : "Verify email") {
-                    Task { _ = await model.verify(code: code) }
+                    Task { _ = await (additional ? model.verifyAddress(code: code) : model.verify(code: code)) }
                 }.disabled(VerificationCode.digits(code).count != 6 || model.isBusy)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Button("Resend code") {
                         Task {
-                            if await model.start(email: email) {
+                            if await (additional ? model.startAddress(email: email) : model.start(email: email)) {
                                 resendAfter = Date().addingTimeInterval(60)
                                 code = ""
                             }
@@ -243,7 +320,7 @@ private struct SubscriptionView: View {
             Section("Personal") { Text("Planned: up to 3 verified addresses, breach details, monitoring and remediation tracking.") }
             Section("Family") { Text("Planned: up to 15 independently verified addresses, with each person's consent.") }
             Section("Purchases unavailable") {
-                Text("Prices, billing periods and trial terms will come from the App Store. Billing and premium breach details are not connected yet.")
+                Text("Prices, billing periods and trial terms will come from the App Store. Purchases are not connected yet. Premium breach details are available to approved test accounts.")
                 Button("Subscribe") {}.disabled(true)
                 Button("Restore purchases") {}.disabled(true)
                 Link("Manage Apple subscriptions", destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
@@ -263,6 +340,8 @@ private struct InformationView: View {
 
 private struct FindingsView: View {
     @Bindable var model: ScanModel
+    @State private var filter: FindingFilter = .all
+    private var dashboard: FindingsDashboard { FindingsDashboard(findings: model.findings) }
 
     private func remediationDate(_ value: String) -> String {
         let formatter = ISO8601DateFormatter()
@@ -284,9 +363,21 @@ private struct FindingsView: View {
                 Text(model.findingsCheckedAt == nil ? "Run a new scan to load detailed findings." : "No known breaches were returned by the last detailed scan.")
             }
             if model.account?.tier == "premium" {
-                ForEach(model.findings) { finding in
+                Section("Progress") {
+                    LabeledContent("Needs attention", value: String(dashboard.outstanding))
+                    LabeledContent("Remediated", value: String(dashboard.remediated))
+                    LabeledContent("Password storage risks", value: String(dashboard.passwordRisks))
+                    LabeledContent("Checklist progress", value: "\(dashboard.completedActions) of \(dashboard.totalActions) actions")
+                    if let date = model.findingsCheckedAt { Text("Last detailed scan: \(remediationDate(date))").font(.footnote) }
+                    Picker("Show findings", selection: $filter) {
+                        ForEach(FindingFilter.allCases) { option in Text(option.rawValue).tag(option) }
+                    }
+                }
+                if !model.findings.isEmpty && dashboard.filtered(filter).isEmpty { Text("No findings match this filter.") }
+                ForEach(dashboard.filtered(filter)) { finding in
                     Section {
                         Text(finding.breachId).font(.headline)
+                        if finding.isNew == true { Label("Newly observed since your baseline", systemImage: "sparkle").font(.caption) }
                         if finding.passwordRiskHighlighted {
                             Label("Password storage risk", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange).font(.headline)
@@ -296,8 +387,17 @@ private struct FindingsView: View {
                         if let domain = finding.domain { LabeledContent("Source domain", value: domain) }
                         if !finding.exposedData.isEmpty { Text("Exposed data: \(finding.exposedData.joined(separator: ", "))") }
                         if let description = finding.description { Text(description).font(.footnote) }
-                        if finding.passwordRiskHighlighted {
-                            Text("Change the affected password and any reused copies. Use unique passwords and enable multi-factor authentication where available.").font(.footnote)
+                        ForEach(finding.remediationSteps ?? []) { step in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Button {
+                                    Task { await model.setAction(finding, step: step, completed: step.completedAt == nil) }
+                                } label: {
+                                    Label(step.title, systemImage: step.completedAt == nil ? "circle" : "checkmark.circle.fill")
+                                }
+                                .accessibilityLabel("\(step.completedAt == nil ? "Complete" : "Undo"): \(step.title)")
+                                .disabled(model.isBusy)
+                                Text(step.detail).font(.footnote).foregroundStyle(.secondary)
+                            }
                         }
                         if let date = finding.remediatedAt {
                             Label("Remediated (self-reported) · \(remediationDate(date))", systemImage: "checkmark.circle")
@@ -310,7 +410,7 @@ private struct FindingsView: View {
             }
             if let message = model.message { Text(message).foregroundStyle(.red) }
         }
-        .navigationTitle("Breach findings")
+        .navigationTitle("Remediation")
         .task { await model.reloadFindings() }
         .refreshable { await model.reloadFindings() }
     }

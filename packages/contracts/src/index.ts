@@ -42,6 +42,7 @@ export const addressSummarySchema = z.strictObject({
   id: z.uuid(),
   email: z.email(),
   verified: z.literal(true),
+  isPrimary: z.boolean(),
   knownBreachCount: z.number().int().nonnegative().nullable(),
   checkedAt: z.iso.datetime().nullable(),
 });
@@ -58,7 +59,7 @@ export const verificationResponseSchema = z.strictObject({
 export const accountResponseSchema = z.strictObject({
   userId: z.uuid(),
   tier: z.enum(['free', 'premium']),
-  quota: z.literal(1),
+  quota: z.number().int().min(1).max(25),
   address: addressSummarySchema,
 });
 
@@ -91,11 +92,20 @@ export const breachDetailsSchema = z.strictObject({
   passwordRiskHighlighted: z.boolean(),
   description: z.string().max(20000).nullable(),
 });
+export const remediationStepSchema = z.strictObject({
+  id: z.string().min(1),
+  title: z.string(),
+  detail: z.string(),
+  completedAt: z.iso.datetime().nullable(),
+});
+export const remediationStepUpdateSchema = z.strictObject({ completed: z.boolean() });
 export const findingSchema = breachDetailsSchema.extend({
   id: z.uuid(),
+  isNew: z.boolean(),
   firstSeenAt: z.iso.datetime(),
   lastSeenAt: z.iso.datetime(),
   remediatedAt: z.iso.datetime().nullable(),
+  remediationSteps: z.array(remediationStepSchema),
 });
 export const findingsResponseSchema = z.strictObject({
   findings: z.array(findingSchema),
@@ -103,3 +113,29 @@ export const findingsResponseSchema = z.strictObject({
 });
 export const remediationSchema = z.strictObject({ remediated: z.boolean() });
 export type BreachDetails = z.infer<typeof breachDetailsSchema>;
+
+export const addressListSchema = z.strictObject({
+  addresses: z.array(addressSummarySchema),
+  quota: z.number().int().min(1).max(25),
+});
+
+export const sessionListSchema = z.strictObject({
+  sessions: z.array(
+    z.strictObject({
+      id: z.uuid(),
+      current: z.boolean(),
+      expiresAt: z.number().int(),
+    }),
+  ),
+});
+
+export const monitoringUpdateSchema = z.strictObject({ enabled: z.boolean() });
+export const monitoringResponseSchema = z.strictObject({
+  enabled: z.boolean(),
+  paused: z.boolean(),
+  cadenceHours: z.literal(24),
+  lastCheckedAt: z.iso.datetime().nullable(),
+  nextCheckAt: z.number().int().nullable(),
+  outcome: z.string().nullable(),
+  pushAvailable: z.literal(false),
+});
