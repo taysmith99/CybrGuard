@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { app, type Bindings } from '../src/index';
 import { reconcileBilling, resolveBilling, resolveV2Billing } from '../src/lib/billing';
-import { requireAddressSlot } from '../src/lib/findings';
+import { addressQuota, requireAddressSlot, requirePremium } from '../src/lib/findings';
 import { hash } from '../src/lib/security';
 import { testDatabase } from './database';
 
@@ -189,6 +189,56 @@ it('serialises concurrent reconciliation and applies downgrade quotas without re
   await expect(requireAddressSlot(env, user, addresses[3] as string, '')).rejects.toThrow();
   await expect(requireAddressSlot(env, user, addresses[0] as string, '')).resolves.toBeUndefined();
   expect(db.raw.prepare('SELECT COUNT(*) AS count FROM monitored_emails').get()?.count).toBe(4);
+});
+it('reconciles v2 renewal and expiry webhooks, fails closed at expiry and retains extra addresses', async () => {
+  env.REVENUECAT_PROJECT_ID = 'fictional-project';
+  env.REVENUECAT_PRO_ENTITLEMENT_ID = 'fictional-pro';
+  const addresses = Array.from({ length: 3 }, () => crypto.randomUUID());
+  for (const [i, id] of addresses.entries()) {
+    db.raw
+      .prepare(`INSERT INTO monitored_emails (id, user_id, encrypted_email, email_index, verified_at, consent_at, is_primary)
+      VALUES (?, ?, 'offline-ciphertext', ?, ?, 1, ?)`)
+      .run(id, user, `offline-v2-${i}`, i + 1, i === 0 ? 1 : 0);
+  }
+  payload = { items: [{ entitlement_id: 'fictional-pro', expires_at: (now + 300) * 1000 }] };
+  vi.mocked(fetch).mockImplementation(async (url, options) => {
+    calls++;
+    expect(String(url)).toBe(
+      `https://api.revenuecat.com/v2/projects/fictional-project/customers/${user}/active_entitlements`,
+    );
+    expect(options?.redirect).toBe('manual');
+    return Response.json(payload);
+  });
+  expect((await webhook('v2-initial', { type: 'INITIAL_PURCHASE' })).status).toBe(200);
+  expect(await addressQuota(env, user, '')).toBe(3);
+  await expect(requireAddressSlot(env, user, addresses[2] as string, '')).resolves.toBeUndefined();
+
+  vi.mocked(Date.now).mockReturnValue((now + 301) * 1000);
+  payload = { items: [{ entitlement_id: 'fictional-pro', expires_at: (now + 600) * 1000 }] };
+  expect((await webhook('v2-renewal', { type: 'RENEWAL' })).status).toBe(200);
+  expect(db.raw.prepare('SELECT entitlement_expires_at FROM billing_state').get()).toMatchObject({
+    entitlement_expires_at: now + 600,
+  });
+  await expect(requirePremium(env, user, '')).resolves.toBeUndefined();
+
+  // Access expires even if the expiration webhook is delayed or absent.
+  vi.mocked(Date.now).mockReturnValue((now + 601) * 1000);
+  await expect(requirePremium(env, user, '')).rejects.toThrow();
+  expect(await addressQuota(env, user, '')).toBe(1);
+  await expect(requireAddressSlot(env, user, addresses[0] as string, '')).resolves.toBeUndefined();
+  await expect(requireAddressSlot(env, user, addresses[2] as string, '')).rejects.toThrow();
+
+  payload = { items: [] };
+  expect((await webhook('v2-expiration', { type: 'EXPIRATION' })).status).toBe(200);
+  expect(
+    db.raw.prepare('SELECT plan, entitlement_expires_at FROM billing_state').get(),
+  ).toMatchObject({ plan: 'free', entitlement_expires_at: null });
+  expect(
+    db.raw.prepare('SELECT expires_at, max_addresses FROM premium_entitlements').get(),
+  ).toMatchObject({ expires_at: 0, max_addresses: 1 });
+  expect(db.raw.prepare('SELECT COUNT(*) AS count FROM monitored_emails').get()?.count).toBe(3);
+  expect((await webhook('v2-expiration', { type: 'EXPIRATION' })).status).toBe(200);
+  expect(calls).toBe(3);
 });
 it('reconciles both sides of a transfer rather than trusting claimed entitlements', async () => {
   const other = crypto.randomUUID();
