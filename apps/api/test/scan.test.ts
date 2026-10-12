@@ -148,6 +148,27 @@ describe('scheduled monitoring', () => {
     expect((await patch(true)).status).toBe(204);
     return { session, user, jobs, patch };
   }
+  it('resumes a plan-paused address immediately after access returns without duplicate dispatch', async () => {
+    const { user, jobs } = await setup();
+    database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
+    await scheduleMonitoring(env);
+    expect(jobs).toHaveLength(0);
+    const row = () =>
+      database.raw
+        .prepare('SELECT next_check_at, last_monitoring_outcome FROM monitored_emails WHERE id = ?')
+        .get(user.address.id);
+    expect(row()?.last_monitoring_outcome).toBe('paused_plan');
+    expect(Number(row()?.next_check_at)).toBeGreaterThan(Math.floor(clock / 1000));
+    database.raw
+      .prepare('UPDATE premium_entitlements SET expires_at = ?')
+      .run(Math.floor(clock / 1000) + 86400);
+    await scheduleMonitoring(env);
+    await scheduleMonitoring(env);
+    expect(jobs).toHaveLength(1);
+    expect(row()?.last_monitoring_outcome).toBe('pending');
+    await processMonitoring(env, jobs[0] as string);
+    expect(row()?.last_monitoring_outcome).toBe('success');
+  });
   it('baselines historical findings, flags only newly observed IDs and deduplicates repeated delivery', async () => {
     const { user, jobs } = await setup();
     await scheduleMonitoring(env);
@@ -214,7 +235,7 @@ describe('scheduled monitoring', () => {
       0,
     );
   });
-  it('keeps monitoring opt-in, enforces ownership and allows disabling after expiry', async () => {
+  it('keeps free monitoring off, enforces ownership and allows disabling after expiry', async () => {
     const { session, user, patch } = await setup();
     let response = await app.request(
       `/v1/addresses/${user.address.id}/monitoring`,
@@ -239,6 +260,12 @@ describe('scheduled monitoring', () => {
     ).toBe(404);
     database.raw.prepare('UPDATE premium_entitlements SET expires_at = 0').run();
     expect((await patch(false)).status).toBe(204);
+    expect((await patch(false)).status).toBe(204);
+    expect(
+      database.raw
+        .prepare('SELECT monitoring_preference_set FROM monitored_emails WHERE id = ?')
+        .get(user.address.id)?.monitoring_preference_set,
+    ).toBe(1);
     expect((await patch(true)).status).toBe(403);
     response = await app.request(
       `/v1/addresses/${user.address.id}/monitoring`,
@@ -349,7 +376,8 @@ describe('additional verified addresses', () => {
       deviceId: device,
     };
   }
-  it('requires independent verification, preserves primary login, and supports removal', async () => {
+  it('requires independent verification, defaults paid monitoring, preserves primary login, and supports removal', async () => {
+    env.MONITORING_QUEUE = { send: vi.fn() } as unknown as Queue;
     const session = await premium();
     const proof = await challenge(session.accessToken, 'second@example.com');
     expect(providerCalls).toBe(0);
@@ -358,6 +386,11 @@ describe('additional verified addresses', () => {
     expect(added.status).toBe(201);
     const address = addressSummarySchema.parse(await added.json());
     expect(address.isPrimary).toBe(false);
+    expect(
+      database.raw
+        .prepare('SELECT monitoring_enabled, next_check_at FROM monitored_emails WHERE id = ?')
+        .get(address.id),
+    ).toMatchObject({ monitoring_enabled: 1, next_check_at: Math.floor(clock / 1000) });
     expect((await post('/v1/addresses/verify/complete', proof, session.accessToken)).status).toBe(
       400,
     );

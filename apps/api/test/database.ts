@@ -15,6 +15,7 @@ export function testDatabase() {
     '0006_multiple_addresses.sql',
     '0007_monitoring.sql',
     '0008_billing.sql',
+    '0009_monitoring_default.sql',
   ]) {
     db.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
   }

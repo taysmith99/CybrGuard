@@ -67,3 +67,15 @@ Staging deployment creates/reuses the isolated `cybrguard-monitoring-staging` qu
 Local testing: run `npm run dev --workspace @cybrguard/api -- --test-scheduled`, enable monitoring in the simulator, then `curl 'http://localhost:8788/__scheduled?cron=%2A%2F15%20%2A%20%2A%20%2A%20%2A'`. This invokes local Cron and the local Queue; it uses the real configured provider and independently verified addresses. Disable monitoring after a temporary test. The test endpoint is Wrangler-local, not a deployed API route.
 
 Inspect D1 `monitoring_jobs` status/attempts/outcome and `monitored_emails.last_monitoring_at`, `next_check_at`, `last_monitoring_outcome` for operational health, using only aggregate queries in shared logs. Failed jobs do not clear prior results; provider 429 extends the global backoff. Job records contain opaque address IDs, not email plaintext. Push and email breach alerts are not sent by this milestone.
+
+
+## Proactive monitoring defaults (device testing update)
+
+Apply migration `0009_monitoring_default.sql` before deploying the updated API (`npm run db:migrate:local` locally; staging deploy applies remote migrations). Paid subscription confirmation through reconciliation/webhooks enables monitoring for eligible verified addresses when the queue is configured. Newly added paid addresses receive the same default. Existing explicit choices, including disabling monitoring, persist across renewals and restore. Existing paid accounts receive defaults on their next successful reconciliation. Free/expired accounts and addresses above quota remain excluded by the scheduler and consumer; this does not enable push delivery.
+
+The app uses shared draft Privacy policy and Terms and conditions screens with generic subprocessor disclosures. Provider inventory and deployment details remain in internal documentation. Legal review, final retention periods and international processing disclosures remain release requirements.
+
+
+### Plan-pause resume fix
+
+A `paused_plan` outcome means no scan was attempted because paid access or quota was unavailable. It is not a provider failure. The monitoring screen no longer displays a generic failure message for internal job outcomes. Confirmed billing restoration clears stale plan pauses and schedules an immediate check; Cron also re-evaluates plan-paused addresses so restoration does not wait for the old one-day deferral. Explicit opt-outs remain disabled. Regression tests cover resume, deduplicated dispatch and successful processing.

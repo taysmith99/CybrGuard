@@ -4,6 +4,7 @@ import SwiftUI
 struct MVPView: View {
     let brandName: String
     let configuration: Result<APIConfiguration, Error>
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: ScanModel
     @State private var showSignIn = false
     @State private var showAddAddress = false
@@ -20,10 +21,12 @@ struct MVPView: View {
         TabView {
             NavigationStack {
                 List {
-                    Section {
-                        Text("Check your email for known data breaches").font(.headline)
-                        Text("Verify an email address to see its known breach count. Details and ongoing monitoring will require a subscription.")
-                        if !model.isSignedIn { Button("Get started / Sign in") { showSignIn = true } }
+                    if !model.isSignedIn {
+                        Section {
+                            Text("Check your email for known data breaches").font(.headline)
+                            Text("Sign in to see your breach count. Upgrade to Pro for details and proactive monitoring.")
+                            Button("Get started") { showSignIn = true }
+                        }
                     }
                     Section("Your results") {
                         if let address = model.selectedAddress {
@@ -34,18 +37,17 @@ struct MVPView: View {
                                     Text("Last successful scan: \(displayDate(timestamp))")
                                         .font(.footnote).foregroundStyle(.secondary)
                                 }
-                                Text("Source: paid XposedOrNot (xonAPI+)").font(.footnote)
-                                if model.account?.tier == "premium" {
+                                if model.canViewFindings {
                                     NavigationLink("Remediation dashboard") { FindingsView(model: model) }
                                 } else { NavigationLink("Unlock breach details") { SubscriptionView(model: model) } }
                             } else { Text("Your email is verified. Run your first scan to see its known breach count.") }
-                            Button(model.isScanning ? "Scanning…" : "Scan verified email") { Task { await model.scan() } }
-                                .disabled(model.isBusy || model.isPaused(address))
+                            Button(model.isScanning ? "Scanning…" : "Scan email") { Task { await model.scan() } }
+                                .disabled(model.requiresConnection || model.isPaused(address))
                             if model.isPaused(address) { Text("This address is paused above your current plan quota.") }
-                            if model.isScanning { ProgressView("Querying breach provider…") }
+                            if model.isScanning { ProgressView("Checking for known breaches…") }
                         } else if model.isSignedIn {
                             Text("Your account could not be loaded.")
-                            Button("Retry loading account") { Task { await model.reloadAccount() } }.disabled(model.isBusy)
+                            Button("Retry loading account") { Task { await model.reloadAccount() } }.disabled(model.requiresConnection)
                         } else {
                             ContentUnavailableView("No scan results", systemImage: "magnifyingglass",
                                 description: Text("Sign in and verify your email before scanning. No scan has been performed."))
@@ -73,18 +75,21 @@ struct MVPView: View {
                                     Text(address.isPrimary == true ? "Primary sign-in email" : "Verified additional email").font(.caption)
                                     if model.isPaused(address) { Text("Paused — above plan quota").font(.caption) }
                                     if address.isPrimary != true {
-                                        Button("Remove address", role: .destructive) { removingAddress = address }.disabled(model.isBusy)
+                                        Button("Remove address", role: .destructive) { removingAddress = address }.disabled(model.requiresConnection)
                                     }
                                 }.buttonStyle(.borderless)
                             }
                             Text("\(model.addresses.count) of \(account.quota) addresses on your \(account.tier) plan.")
                             Button("Add an email address") { showAddAddress = true }
-                                .disabled(model.isBusy || account.tier != "premium" || model.addresses.count >= account.quota)
-                            Button("Refresh addresses") { Task { await model.reloadAccount() } }.disabled(model.isBusy)
+                                .disabled(model.requiresConnection || account.tier != "premium" || model.addresses.count >= account.quota)
+                            Button("Refresh addresses") { Task { await model.reloadAccount() } }.disabled(model.requiresConnection)
                             errorMessage
+                        } else if model.isSignedIn {
+                            Text("Connect to load your verified addresses.")
+                            Button("Try again") { Task { await model.refreshSavedContent() } }.disabled(model.isBusy)
                         } else {
                             Text("Sign in to verify your first address.")
-                            Button("Verify an email address") { showSignIn = true }.disabled(model.isBusy || model.isSignedIn)
+                            Button("Verify an email address") { showSignIn = true }.disabled(model.requiresConnection || model.isSignedIn)
                         }
                     }
                     Section {
@@ -97,7 +102,7 @@ struct MVPView: View {
 
             NavigationStack {
                 List {
-                    Section("Daily monitoring") {
+                    Section("Proactive monitoring") {
                         if let address = model.selectedAddress {
                             Text(address.email)
                             if let status = model.monitoring {
@@ -106,21 +111,19 @@ struct MVPView: View {
                                 if let next = status.nextCheckAt, status.enabled && !status.paused {
                                     Text("Next check due: \(Date(timeIntervalSince1970: Double(next)).formatted(date: .abbreviated, time: .shortened))")
                                 }
-                                if let outcome = status.outcome, outcome != "success", outcome != "disabled", outcome != "pending" {
-                                    Text("Last check did not complete. The backend retries temporary failures; your previous results remain available.")
-                                }
-                                Button(status.enabled ? "Disable daily monitoring" : "Enable daily monitoring") {
-                                    Task { await model.setMonitoring(enabled: !status.enabled) }
-                                }.disabled(model.isBusy || (!status.enabled && (model.account?.tier != "premium" || model.isPaused(address))))
+                                Toggle("Proactive monitoring", isOn: Binding(
+                                    get: { status.enabled },
+                                    set: { enabled in Task { await model.setMonitoring(enabled: enabled) } }
+                                )).disabled(model.requiresConnection || (!status.enabled && (model.account?.tier != "premium" || model.isPaused(address))))
                             }
-                            Button("Refresh monitoring status") { Task { await model.reloadMonitoring() } }.disabled(model.isBusy)
-                        } else { Text("Sign in and select a verified email first.") }
-                        Text("Opt in to checking this verified address with XON about once daily. Existing findings form a historical baseline. Newly observed breaches are flagged in your dashboard; this is not real-time detection.")
+                            Button("Refresh monitoring status") { Task { await model.reloadMonitoring() } }.disabled(model.requiresConnection)
+                        } else { Text(model.isSignedIn ? "Connect to load your monitoring status." : "Sign in and select a verified email first.") }
+                        Text("New findings appear in your dashboard. Checks are periodic, not real-time.")
                         NavigationLink("View subscription options") { SubscriptionView(model: model) }
                         errorMessage
                     }
                     Section("Notifications") {
-                        Text("Push delivery is not configured. When available, alerts will say “New security finding — open the app to review.”")
+                        Text("Push notifications are not available yet. Check your dashboard for new findings.")
                     }
                 }
                 .navigationTitle("Monitoring")
@@ -131,51 +134,64 @@ struct MVPView: View {
             NavigationStack {
                 List {
                     Section("Account") {
-                        LabeledContent("Status", value: model.isSignedIn ? "Signed in" : "Signed out")
+                        LabeledContent("Status", value: model.isSignedIn ? (model.isOffline ? "Signed in · offline" : "Signed in") : "Signed out")
                         if let account = model.account { Text(account.address.email) }
                         if model.isSignedIn {
                             NavigationLink("Signed-in devices and sessions") { SessionsView(model: model) }
                             Button("Sign out") { Task { await model.logout() } }.disabled(model.isBusy)
-                            Button("Delete account", role: .destructive) { confirmDeletion = true }.disabled(model.isBusy)
-                        } else { Button("Sign in") { showSignIn = true }.disabled(model.isBusy) }
+                            Button("Delete account", role: .destructive) { confirmDeletion = true }.disabled(model.requiresConnection)
+                        } else { Button("Sign in") { showSignIn = true }.disabled(model.requiresConnection) }
                         NavigationLink("Subscription") { SubscriptionView(model: model) }
                         errorMessage
                     }
                     Section("Privacy and help") {
                         Link("Email support", destination: URL(string: "mailto:security@cybrguard.app?subject=CybrGuard%20support")!)
-                        NavigationLink("Privacy") {
-                            InformationView(title: "Privacy", paragraphs: [
-                                "Cloudflare Email Service receives your email to deliver a one-time verification code. After you verify and consent, the backend sends the verified address to the paid XposedOrNot (xonAPI+) service.",
-                                "The backend encrypts your email at rest and stores its verified status, consent time, last successful breach count and scan time. For premium access, individual breach details are encrypted at rest and your remediation marks are stored. Verification codes are hashed, expire after 10 minutes and are removed during later sign-in requests after expiry. Session tokens are stored in your device Keychain; codes are not saved by the app.",
-                                "Account deletion removes the stored account, email, results, verification challenges and sessions from CybrGuard. It does not erase historical records at the breach provider or email-provider delivery records.",
-                                "This is a development notice. Production retention, privacy policy and terms require review before launch."
-                            ])
-                        }
-                        NavigationLink("Terms") {
-                            InformationView(title: "Terms", paragraphs: [
-                                "Terms of service require review before launch. Purchases and trials require Apple and RevenueCat configuration. Daily monitoring is available to premium users who opt in.",
-                                "Breach monitoring provides information about known historical exposures. It cannot prevent breaches or guarantee that an account is safe."
-                            ])
-                        }
+                        LegalLinks()
                         NavigationLink("Help") {
                             InformationView(title: "Help", paragraphs: [
-                                "Enter your email, consent to the provider query and request a verification code. Enter the six-digit (XXX-XXX) code from your inbox within 10 minutes. Each code can be used once; after five incorrect attempts request a new code.",
-                                "Once verified, tap Scan verified email. Re-scans are limited to once per minute. Provider errors preserve the last successful result.",
-                                "The local API must be running. A physical iPhone needs a reachable HTTPS backend; localhost only reaches your Mac in the simulator."
+                                "Enter your email, agree to breach checking and request a verification code. Enter the six-digit (XXX-XXX) code from your inbox within 10 minutes. Each code can be used once; after five incorrect attempts request a new code.",
+                                "Once verified, tap Scan email. Re-scans are limited to once per minute. Provider errors preserve the last successful result.",
+                                "If a check fails, try again when you have an internet connection. Your last successful results stay available."
                             ])
                         }
                     }
+                    #if DEBUG
                     Section("Development") {
-                        NavigationLink("API connection") {
+                        NavigationLink("Connection status") {
                             DevelopmentStatusView(brandName: brandName, configuration: configuration)
                         }
                     }
+                    #endif
                 }
                 .navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
-        .task { await model.restore() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.isOffline {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(model.savedAt == nil ? "You’re offline" : "Offline — showing saved information", systemImage: "wifi.slash").font(.subheadline)
+                    if let savedAt = model.savedAt {
+                        Text("Last updated \(savedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption)
+                    } else { Text("Connect to load your account and results.").font(.caption) }
+                    Button("Try again") { Task { await model.refreshSavedContent() } }.disabled(model.isBusy)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal).padding(.vertical, 8)
+                .background(.regularMaterial)
+            }
+        }
+        .task {
+            model.startConnectivityMonitoring()
+            await model.restore()
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) } catch { break }
+                model.expireOfflineAccess()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshSavedContent() } }
+        }
         .sheet(isPresented: $showSignIn, onDismiss: { model.cancelVerification() }) { SignInView(model: model) }
         .sheet(isPresented: $showAddAddress, onDismiss: { model.cancelAddressVerification() }) { SignInView(model: model, additional: true) }
         .confirmationDialog("Remove this address and its stored findings?", isPresented: Binding(get: { removingAddress != nil }, set: { if !$0 { removingAddress = nil } }), titleVisibility: .visible) {
@@ -185,7 +201,7 @@ struct MVPView: View {
         }
         .confirmationDialog("Delete your CybrGuard account and stored data?", isPresented: $confirmDeletion, titleVisibility: .visible) {
             Button("Delete account permanently", role: .destructive) { Task { await model.deleteAccount() } }
-        } message: { Text("Your email, findings, remediation marks, scan count and sessions will be removed. Historical breach records at XON will remain.") }
+        } message: { Text("Your email, findings, remediation marks, scan count and sessions will be removed. Historical breach records held by other services will remain. Deleting your account does not cancel your subscription.") }
     }
 
     @ViewBuilder private var errorMessage: some View {
@@ -211,12 +227,12 @@ private struct SessionsView: View {
                         Text("Expires \(Date(timeIntervalSince1970: Double(session.expiresAt)).formatted(date: .abbreviated, time: .shortened))").font(.caption)
                         Text("Session \(session.id.prefix(8))").font(.caption).foregroundStyle(.secondary)
                         if !session.current {
-                            Button("Sign out this session", role: .destructive) { Task { await model.revokeSession(session) } }.disabled(model.isBusy)
+                            Button("Sign out this session", role: .destructive) { Task { await model.revokeSession(session) } }.disabled(model.requiresConnection)
                         }
                     }.buttonStyle(.borderless)
                 }
-                Button("Refresh sessions") { Task { await model.reloadSessions() } }.disabled(model.isBusy)
-                Button("Sign out all other sessions", role: .destructive) { confirmOthers = true }.disabled(model.isBusy || model.sessions.count < 2)
+                Button("Refresh sessions") { Task { await model.reloadSessions() } }.disabled(model.requiresConnection)
+                Button("Sign out all other sessions", role: .destructive) { confirmOthers = true }.disabled(model.requiresConnection || model.sessions.count < 2)
                 if let message = model.message { Text(message).foregroundStyle(.red) }
             }
             Text("Each sign-in creates a separate session. Device names and locations are not collected.")
@@ -254,14 +270,15 @@ private struct SignInView: View {
                     Text("Use an address you own or have permission to verify. Results require the one-time code delivered to this mailbox.")
                 }
                 Section {
-                    Toggle(additional ? "The mailbox owner consents to verification and breach queries with XposedOrNot (xonAPI+)." : "I consent to querying my verified email with XposedOrNot (xonAPI+) for known breaches.", isOn: $consent)
-                    Text("Cloudflare Email Service delivers the verification code. Only after verification will your address be sent to XON.")
+                    Toggle(additional ? "I have the mailbox owner’s permission to verify and monitor this email." : "I agree to checking my verified email for known breaches.", isOn: $consent)
+                    Text("We’ll send a code to confirm access before checking for breaches. Read how we use your information below.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    LegalLinks()
                 }
                 Section {
                     Button(model.isBusy ? "Sending…" : "Send verification code") {
                         Task { if await (additional ? model.startAddress(email: email) : model.start(email: email)) { showVerification = true } }
-                    }.disabled(!validEmail || !consent || model.isBusy)
+                    }.disabled(!validEmail || !consent || model.requiresConnection)
                     if model.isBusy { ProgressView() }
                     if let message = model.message { Text(message).foregroundStyle(.red) }
                 }
@@ -294,7 +311,7 @@ private struct VerificationView: View {
                     .onChange(of: code) { _, value in code = VerificationCode.formatted(value) }
                 Button(model.isBusy ? "Verifying…" : "Verify email") {
                     Task { _ = await (additional ? model.verifyAddress(code: code) : model.verify(code: code)) }
-                }.disabled(VerificationCode.digits(code).count != 6 || model.isBusy)
+                }.disabled(VerificationCode.digits(code).count != 6 || model.requiresConnection)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Button("Resend code") {
                         Task {
@@ -303,7 +320,7 @@ private struct VerificationView: View {
                                 code = ""
                             }
                         }
-                    }.disabled(context.date < resendAfter || model.isBusy)
+                    }.disabled(context.date < resendAfter || model.requiresConnection)
                 }
                 if model.isBusy { ProgressView() }
                 if let message = model.message { Text(message).foregroundStyle(.red) }
@@ -313,11 +330,42 @@ private struct VerificationView: View {
     }
 }
 
+enum LegalContent {
+    static let privacy = [
+        "Draft privacy policy — requires review before public release.",
+        "CybrGuard uses your verified email addresses to check for known data breaches and provide proactive monitoring. We also store verification and consent records, minimal breach details, your action progress and subscription status to operate your account.",
+        "We use subprocessors to host and secure the service, deliver verification messages, check verified emails against breach records and manage subscriptions. They receive the information needed for those tasks, which may be processed outside Australia. We do not collect your passwords or display stolen credentials.",
+        "Stored email addresses and breach details are encrypted, including saved results on your device for offline viewing. Saved device data is removed when you sign out or delete your account. Sign-in credentials are kept in your device’s secure storage. Verification codes expire after 10 minutes and can only be used once. We limit access to account information and do not include sensitive breach details in notification messages.",
+        "You can remove additional addresses, turn off monitoring or delete your account in Settings. Account deletion removes your stored account data, findings, action progress and sign-in sessions. It does not remove historical records held by other services or cancel an Apple subscription.",
+        "Contact security@cybrguard.app for privacy questions or account assistance. Retention periods and international processing arrangements must be finalised before public release."
+    ]
+    static let terms = [
+        "Draft terms and conditions — require review before public release.",
+        "Only verify and monitor addresses you own or have the owner’s permission to use. Every address requires independent verification. You agree that CybrGuard and its subprocessors may process verified addresses to provide breach checking and monitoring as described in the privacy policy.",
+        "Free access includes a verified email’s known breach count. Pro includes breach details, action tracking and proactive monitoring within your plan’s address limit. Monitoring turns on automatically after a subscription is confirmed, including for newly verified eligible addresses. You can turn it off at any time. Monitoring checks are periodic, currently targeted about once a day, and are not real-time alerts.",
+        "Subscriptions renew automatically unless cancelled. The purchase screen shows the price, billing period and any eligible trial before confirmation. Manage or cancel Apple subscriptions through your Apple account. Account deletion does not cancel your subscription. On expiry or downgrade, paid features and addresses above your plan limit are paused.",
+        "Breach records describe known historical exposures. Coverage may be incomplete; no result guarantees that an account is safe or currently compromised. Marking a finding actioned records your own progress and does not erase the breach record.",
+        "CybrGuard relies on subprocessors for service delivery. Checks may be delayed or unavailable, and previous successful results remain available when a check fails. Push notifications are not available in this testing build.",
+        "Contact security@cybrguard.app for support. These draft terms do not exclude rights under Australian Consumer Law."
+    ]
+}
+
+struct LegalLinks: View {
+    var body: some View {
+        NavigationLink("Privacy policy") { InformationView(title: "Privacy policy", paragraphs: LegalContent.privacy) }
+        NavigationLink("Terms and conditions") { InformationView(title: "Terms and conditions", paragraphs: LegalContent.terms) }
+    }
+}
+
 struct InformationView: View {
     let title: String
     let paragraphs: [String]
     var body: some View {
-        List { ForEach(paragraphs, id: \.self) { Text($0) } }.navigationTitle(title)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                ForEach(paragraphs, id: \.self) { Text($0).frame(maxWidth: .infinity, alignment: .leading) }
+            }.padding()
+        }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -338,14 +386,14 @@ private struct FindingsView: View {
                 Text("Highlighted findings report plaintext or easy-to-crack password storage.")
                 Text("Remediated means you report taking action. CybrGuard cannot verify external password changes or remove historical breach records.").font(.footnote).foregroundStyle(.secondary)
             }
-            if model.account?.tier != "premium" {
-                Text("Premium access is required. Purchases are not connected yet.")
+            if !model.canViewFindings {
+                Text(model.isOffline ? "Connect to confirm Pro access and load your breach details." : "Upgrade to Pro to view breach details and track your actions.")
             } else if model.isBusy && model.findings.isEmpty {
                 ProgressView("Loading findings…")
             } else if model.findings.isEmpty {
-                Text(model.findingsCheckedAt == nil ? "Run a new scan to load detailed findings." : "No known breaches were returned by the last detailed scan.")
+                Text(model.findingsCheckedAt == nil ? (model.isOffline ? "No saved details for this address. Connect to load them." : "Run a new scan to load detailed findings.") : "No known breaches were returned by the last detailed scan.")
             }
-            if model.account?.tier == "premium" {
+            if model.canViewFindings {
                 Section("Progress") {
                     LabeledContent("Needs attention", value: String(dashboard.outstanding))
                     LabeledContent("Remediated", value: String(dashboard.remediated))
@@ -378,7 +426,7 @@ private struct FindingsView: View {
                                     Label(step.title, systemImage: step.completedAt == nil ? "circle" : "checkmark.circle.fill")
                                 }
                                 .accessibilityLabel("\(step.completedAt == nil ? "Complete" : "Undo"): \(step.title)")
-                                .disabled(model.isBusy)
+                                .disabled(model.requiresConnection)
                                 Text(step.detail).font(.footnote).foregroundStyle(.secondary)
                             }
                         }
@@ -387,7 +435,7 @@ private struct FindingsView: View {
                         }
                         Button(finding.remediatedAt == nil ? "Mark as remediated" : "Undo remediation mark") {
                             Task { await model.setRemediated(finding, remediated: finding.remediatedAt == nil) }
-                        }.disabled(model.isBusy)
+                        }.disabled(model.requiresConnection)
                     }
                 }
             }

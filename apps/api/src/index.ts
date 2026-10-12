@@ -83,8 +83,8 @@ app.get('/v1/health', async (c) => {
       'SELECT version FROM schema_metadata WHERE id = 1',
     ).first<number>('version');
     if (
-      ![1, 2, 3, 4, 5, 6, 7, 8].includes(version ?? 0) ||
-      (c.env.DATA_MODE === 'live' && version !== 8)
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(version ?? 0) ||
+      (c.env.DATA_MODE === 'live' && version !== 9)
     )
       throw new Error('Schema is not ready');
   } catch {

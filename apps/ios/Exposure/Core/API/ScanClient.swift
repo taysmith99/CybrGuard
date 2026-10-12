@@ -11,7 +11,7 @@ public struct VerificationChallenge: Decodable, Sendable {
     public let expiresIn: Int
 }
 
-public struct AddressSummary: Decodable, Sendable, Equatable {
+public struct AddressSummary: Codable, Sendable, Equatable {
     public let id: String
     public let email: String
     public let verified: Bool
@@ -27,7 +27,7 @@ public struct BillingStatus: Decodable, Sendable {
     public let verifiedAt: Int?
 }
 
-public struct MonitoringStatus: Decodable, Sendable {
+public struct MonitoringStatus: Codable, Sendable {
     public let enabled: Bool
     public let paused: Bool
     public let cadenceHours: Int
@@ -51,21 +51,21 @@ public struct AddressList: Decodable, Sendable {
     public let quota: Int
 }
 
-public struct AccountResponse: Decodable, Sendable {
+public struct AccountResponse: Codable, Sendable {
     public let userId: String
     public let tier: String
     public let quota: Int
     public var address: AddressSummary
 }
 
-public struct RemediationStep: Decodable, Sendable, Identifiable, Equatable {
+public struct RemediationStep: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public let title: String
     public let detail: String
     public let completedAt: String?
 }
 
-public struct BreachFinding: Decodable, Sendable, Identifiable, Equatable {
+public struct BreachFinding: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public let isNew: Bool?
     public let breachId: String
@@ -81,7 +81,7 @@ public struct BreachFinding: Decodable, Sendable, Identifiable, Equatable {
     public let remediationSteps: [RemediationStep]?
 }
 
-public struct FindingsResponse: Decodable, Sendable {
+public struct FindingsResponse: Codable, Sendable {
     public let findings: [BreachFinding]
     public let checkedAt: String?
 }
@@ -97,7 +97,7 @@ public enum ScanClientError: Error, LocalizedError, Equatable {
             if let retry { return "\(message) Try again in \(retry) seconds." }
             return message
         case .invalidResponse: return "The API returned an unsupported response."
-        case .connection: return "Unable to connect to the API. Check your connection and try again."
+        case .connection: return "You’re offline or the service is unavailable. Connect to the internet and try again."
         }
     }
 
@@ -241,6 +241,7 @@ public struct ScanClient: Sendable {
         let response: HTTPURLResponse
         do { (data, response) = try await transport.send(request) }
         catch is CancellationError { throw CancellationError() }
+        catch let error as URLError where error.code == .cancelled { throw CancellationError() }
         catch { throw ScanClientError.connection }
         guard response.url == url else { throw ScanClientError.invalidResponse }
         if response.statusCode == 204 { return data }

@@ -373,3 +373,89 @@ it('verifies modern v2 active entitlements with trusted project and Pro entitlem
     resolveV2Billing({ items: [], next_page: '/another-page' }, 'entitlement-pro', now),
   ).toThrow();
 });
+
+it('enables proactive monitoring for confirmed paid addresses within quota and preserves opt-outs', async () => {
+  env.MONITORING_QUEUE = { send: vi.fn() } as unknown as Queue;
+  for (let i = 0; i < 4; i++) {
+    db.raw
+      .prepare(`INSERT INTO monitored_emails
+      (id, user_id, encrypted_email, email_index, verified_at, consent_at, is_primary)
+      VALUES (?, ?, 'ciphertext', ?, ?, ?, ?)`)
+      .run(`address-${i}`, user, `index-${i}`, now + i, now, i === 0 ? 1 : 0);
+  }
+  await reconcileBilling(env, user);
+  const rows = () =>
+    db.raw
+      .prepare(
+        'SELECT id, monitoring_enabled, monitoring_generation, next_check_at FROM monitored_emails ORDER BY id',
+      )
+      .all();
+  expect(rows().map((row) => row.monitoring_enabled)).toEqual([1, 1, 1, 0]);
+  expect(rows()[0]).toMatchObject({ monitoring_generation: 1, next_check_at: now });
+  // Renewing never reschedules checks or overrides a deliberate opt-out.
+  db.raw
+    .prepare(
+      "UPDATE monitored_emails SET monitoring_enabled = 0, monitoring_preference_set = 1, next_check_at = NULL WHERE id = 'address-1'",
+    )
+    .run();
+  await reconcileBilling(env, user);
+  expect(rows().map((row) => row.monitoring_enabled)).toEqual([1, 0, 1, 0]);
+  expect(rows()[0]?.monitoring_generation).toBe(1);
+  // A higher quota defaults newly eligible addresses, but retains the opt-out.
+  payload = snapshot({ monitoring_family: { expires_date: future(86400) } });
+  await reconcileBilling(env, user);
+  expect(rows().map((row) => row.monitoring_enabled)).toEqual([1, 0, 1, 1]);
+  payload = snapshot({});
+  await reconcileBilling(env, user);
+  await expect(requirePremium(env, user, '')).rejects.toMatchObject({
+    code: 'subscription_required',
+  });
+});
+
+it('does not enable monitoring without confirmed paid access or a configured queue', async () => {
+  db.raw
+    .prepare(`INSERT INTO monitored_emails
+    (id, user_id, encrypted_email, email_index, verified_at, consent_at)
+    VALUES ('address', ?, 'ciphertext', 'index', ?, ?)`)
+    .run(user, now, now);
+  await reconcileBilling(env, user);
+  expect(
+    db.raw.prepare('SELECT monitoring_enabled FROM monitored_emails').get()?.monitoring_enabled,
+  ).toBe(0);
+  env.MONITORING_QUEUE = { send: vi.fn() } as unknown as Queue;
+  payload = snapshot({});
+  await reconcileBilling(env, user);
+  expect(
+    db.raw.prepare('SELECT monitoring_enabled FROM monitored_emails').get()?.monitoring_enabled,
+  ).toBe(0);
+  db.raw.prepare('DELETE FROM users WHERE id = ?').run(user);
+  await reconcileBilling(env, user);
+  expect(db.raw.prepare('SELECT COUNT(*) AS count FROM monitored_emails').get()?.count).toBe(0);
+});
+
+it('clears a stale plan pause on confirmed renewal while preserving explicit disabled addresses', async () => {
+  env.MONITORING_QUEUE = { send: vi.fn() } as unknown as Queue;
+  for (let i = 0; i < 2; i++) {
+    db.raw
+      .prepare(`INSERT INTO monitored_emails (id, user_id, encrypted_email, email_index, verified_at, consent_at,
+      monitoring_enabled, monitoring_preference_set, last_monitoring_outcome, next_check_at)
+      VALUES (?, ?, 'ciphertext', ?, ?, ?, ?, 1, 'paused_plan', ?)`)
+      .run(`address-${i}`, user, `index-${i}`, now, now, i === 0 ? 1 : 0, now + 86400);
+  }
+  await reconcileBilling(env, user);
+  expect(
+    db.raw
+      .prepare(
+        'SELECT monitoring_enabled, next_check_at, last_monitoring_outcome FROM monitored_emails WHERE id = ?',
+      )
+      .get('address-0'),
+  ).toMatchObject({
+    monitoring_enabled: 1,
+    next_check_at: now,
+    last_monitoring_outcome: 'pending',
+  });
+  expect(
+    db.raw.prepare('SELECT monitoring_enabled FROM monitored_emails WHERE id = ?').get('address-1')
+      ?.monitoring_enabled,
+  ).toBe(0);
+});

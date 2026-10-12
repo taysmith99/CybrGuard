@@ -22,18 +22,37 @@ export async function scheduleMonitoring(env: Bindings) {
   if (env.DATA_MODE !== 'live' || env.APP_ENV === 'production' || !env.MONITORING_QUEUE) return;
   const now = nowSeconds();
   const due =
-    await env.DB.prepare(`SELECT id, user_id, monitoring_generation, next_check_at FROM monitored_emails
-    WHERE monitoring_enabled = 1 AND next_check_at <= ? ORDER BY next_check_at, id LIMIT 100`)
+    await env.DB.prepare(`SELECT id, user_id, monitoring_generation, next_check_at, last_monitoring_outcome FROM monitored_emails
+    WHERE monitoring_enabled = 1 AND (next_check_at <= ? OR last_monitoring_outcome = 'paused_plan') ORDER BY next_check_at, id LIMIT 100`)
       .bind(now)
-      .all<{ id: string; user_id: string; monitoring_generation: number; next_check_at: number }>();
+      .all<{
+        id: string;
+        user_id: string;
+        monitoring_generation: number;
+        next_check_at: number;
+        last_monitoring_outcome: string | null;
+      }>();
   for (const address of due.results) {
     if (!(await eligible(env, address.user_id, address.id))) {
+      if (address.next_check_at > now) continue;
       await env.DB.prepare(
         'UPDATE monitored_emails SET next_check_at = ?, last_monitoring_outcome = ? WHERE id = ? AND monitoring_generation = ?',
       )
         .bind(now + daily, 'paused_plan', address.id, address.monitoring_generation)
         .run();
       continue;
+    }
+    if (address.last_monitoring_outcome === 'paused_plan') {
+      // A plan pause is not a failed scan. Resume immediately when access
+      // returns instead of retaining the pause's one-day deferral.
+      const resumed = await env.DB.prepare(`UPDATE monitored_emails
+        SET next_check_at = ?, last_monitoring_outcome = 'pending'
+        WHERE id = ? AND monitoring_enabled = 1 AND monitoring_generation = ?
+        AND last_monitoring_outcome = 'paused_plan' RETURNING id`)
+        .bind(now, address.id, address.monitoring_generation)
+        .first();
+      if (!resumed) continue;
+      address.next_check_at = now;
     }
     await env.DB.prepare(`INSERT INTO monitoring_jobs (id, address_id, generation, scheduled_at)
       SELECT ?, id, monitoring_generation, next_check_at FROM monitored_emails

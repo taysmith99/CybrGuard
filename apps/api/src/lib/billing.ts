@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Bindings } from '../index';
+import { defaultMonitoring } from './monitoring-default';
 import { APIError } from './security';
 
 const entitlement = z.object({
@@ -163,6 +164,7 @@ export async function reconcileBilling(env: Bindings, userId: string) {
       env.DB.prepare(
         'UPDATE billing_state SET plan = ?, entitlement_expires_at = ?, verified_at = ? WHERE user_id = ? AND lease_token = ?',
       ).bind(resolved.plan, resolved.expiresAt, now, userId, token),
+      defaultMonitoring(env, userId, now),
     ]);
     if (!results[0]?.meta.changes)
       throw new APIError('unauthorised', 401, 'This account is no longer available.');

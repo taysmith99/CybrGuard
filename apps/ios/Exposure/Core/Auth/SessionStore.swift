@@ -6,7 +6,14 @@ public enum SessionStoreError: Error, LocalizedError {
     public var errorDescription: String? { "Unable to access secure session storage. Unlock your device and try again." }
 }
 
-public final class SessionStore {
+public protocol SessionPersisting {
+    func deviceId() throws -> String
+    func load() throws -> SessionCredentials?
+    func save(_ credentials: SessionCredentials) throws
+    func clear() throws
+}
+
+public final class SessionStore: SessionPersisting {
     private let service: String
     public init(namespace: String) { service = "app.cybrguard.sessions.\(namespace)" }
 
@@ -30,8 +37,19 @@ public final class SessionStore {
     }
 
     public func clear() throws {
-        let result = SecItemDelete(query("credentials") as CFDictionary)
-        guard result == errSecSuccess || result == errSecItemNotFound else { throw SessionStoreError.keychain }
+        for account in ["credentials", "offline-key"] {
+            let result = SecItemDelete(query(account) as CFDictionary)
+            guard result == errSecSuccess || result == errSecItemNotFound else { throw SessionStoreError.keychain }
+        }
+    }
+
+    func offlineKey() throws -> Data {
+        if let existing = try read("offline-key") { return existing }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw SessionStoreError.keychain }
+        let key = Data(bytes)
+        try write("offline-key", data: key)
+        return key
     }
 
     private func query(_ account: String) -> [String: Any] {

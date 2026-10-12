@@ -21,6 +21,11 @@ final class SubscriptionModel {
 
 
     func load(account: ScanModel) async {
+        guard !account.isOffline else {
+            ready = false
+            message = "Connect to view plans, purchase or restore your subscription."
+            return
+        }
         guard !busy else { return }
         busy = true
         defer { busy = false }
@@ -28,7 +33,7 @@ final class SubscriptionModel {
         guard let userId = account.account?.userId else { message = "Sign in before purchasing or restoring a subscription."; return }
         guard let key = Bundle.main.object(forInfoDictionaryKey: "RevenueCatPublicKey") as? String,
               (key.hasPrefix("appl_") || key.hasPrefix("test_")), !key.contains("$(") else {
-            message = "Purchases are not configured yet. Apple and RevenueCat setup is still required."
+            message = "Purchases are unavailable in this build."
             return
         }
         isTestStore = key.hasPrefix("test_")
@@ -91,10 +96,10 @@ final class SubscriptionModel {
         customerInfo = info
         if backendConfigured {
             message = await account.reconcileSubscription()
-                ? "Subscription checked with the server. Your account access is updated."
-                : "RevenueCat updated. Server confirmation is pending; try Refresh access."
+                ? "Your subscription and account access are up to date."
+                : "Your purchase is awaiting confirmation. Try Refresh access shortly."
         } else {
-            message = "Test Store updated in RevenueCat. Backend access still requires server-side RevenueCat configuration."
+            message = "Test purchase recorded. Account access is awaiting server configuration."
         }
     }
 
@@ -135,49 +140,45 @@ struct SubscriptionView: View {
     var body: some View {
         List {
             Section("Your access") {
-                if billing.ready { LabeledContent("RevenueCat Pro entitlement", value: billing.hasPro ? "Active" : "Inactive") }
-                if billing.isTestStore { Text("RevenueCat Test Store — simulated purchases, no real charges.").font(.footnote) }
-                Text("Current account access: \(model.account?.tier ?? "signed out")")
-                Text("Free access includes one verified address and its known breach count. CybrGuard Pro supports up to 3 verified emails. Paid access includes breach details, remediation tracking and opt-in daily checks.")
+                if billing.ready { LabeledContent("Pro subscription", value: billing.hasPro ? "Active" : "Inactive") }
+                if billing.isTestStore { Text("Test purchases — no real charges.").font(.footnote) }
+                Text("Account access: \(model.account?.tier ?? "signed out")")
+                Text("Free access includes one verified address and its known breach count. CybrGuard Pro supports up to 3 verified emails. Paid access includes breach details, remediation tracking and proactive monitoring.")
             }
             Section("Subscription options") {
-                Button("View RevenueCat Paywall") { showPaywall = true }
-                    .disabled(!billing.ready || billing.offering == nil || billing.busy || model.isBusy)
-                Button("Manage subscription in Customer Center") { showCustomerCenter = true }
-                    .disabled(!billing.ready || billing.busy || model.isBusy)
-                Button("Refresh RevenueCat customer info") { Task { await billing.refreshCustomer(account: model) } }
-                    .disabled(!billing.ready || billing.busy || model.isBusy)
-                if billing.busy { ProgressView("Contacting subscription service…") }
-                if let message = billing.message { Text(message) }
-                Button("Reload subscription options") { Task { await billing.load(account: model) } }.disabled(billing.busy || model.isBusy)
-                Button("Restore purchases") { Task { await billing.restore(account: model) } }.disabled(!billing.ready || billing.busy || model.isBusy)
-                Button("Refresh access") { Task { _ = await model.reconcileSubscription() } }.disabled(billing.busy || model.isBusy || !model.isSignedIn)
-                if let message = model.message { Text(message).foregroundStyle(.red) }
                 ForEach(billing.packages, id: \.identifier) { package in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(package.storeProduct.localizedTitle).font(.headline)
                         Text("\(package.storeProduct.localizedPriceString) / \(SubscriptionModel.period(package.storeProduct))")
                         Button("Subscribe") { Task { await billing.purchase(package, account: model) } }
-                            .disabled(billing.busy || model.isBusy || !billing.ready)
+                            .disabled(billing.busy || model.requiresConnection || !billing.ready)
                     }.buttonStyle(.borderless)
                 }
+                Button("Compare plans") { showPaywall = true }
+                    .disabled(!billing.ready || billing.offering == nil || billing.busy || model.requiresConnection)
+            }
+            Section("Manage your subscription") {
+                Button("Manage subscription") { showCustomerCenter = true }
+                    .disabled(!billing.ready || billing.busy || model.requiresConnection)
+                if billing.busy { ProgressView("Contacting subscription service…") }
+                if let message = billing.message { Text(message) }
+                Button("Restore purchases") { Task { await billing.restore(account: model) } }.disabled(!billing.ready || billing.busy || model.requiresConnection)
+                Button("Refresh access") { Task { await billing.refreshCustomer(account: model) } }
+                    .disabled(!billing.ready || billing.busy || model.requiresConnection)
+                if let message = model.message { Text(message).foregroundStyle(.red) }
+
             }
             Section("Billing terms") {
-                NavigationLink("Privacy") {
-                    InformationView(title: "Privacy", paragraphs: ["Verified, consented email addresses are sent to XON for breach checks. Emails and breach details are encrypted in CybrGuard storage. RevenueCat receives your opaque account ID and purchase information to manage subscriptions.", "Delete your account in Settings to remove stored emails, findings, action progress, sessions and billing snapshots. Deletion does not erase breach-provider history or cancel your Apple subscription.", "Development notice: the full privacy policy requires review before release."])
-                }
-                NavigationLink("Terms") {
-                    InformationView(title: "Terms", paragraphs: ["Subscriptions renew automatically until cancelled through Apple. Apple displays the price, period and any eligible introductory offer before purchase. Restore purchases and subscription management are available on this screen.", "Breach information concerns historical exposures and cannot guarantee current security. Marking a finding remediated records your own action.", "Development notice: terms require legal review before App Store release."])
-                }
+                LegalLinks()
                 Text("Subscriptions renew automatically until cancelled through your Apple account. Apple confirms the price, billing period and any eligible introductory offer before purchase. Account deletion does not cancel an Apple subscription.")
                 Link("Manage Apple subscriptions", destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
-                Text("Privacy: your verified emails are sent to XON only with consent. RevenueCat receives your opaque account ID and purchase information; provider keys stay on the server.")
-                Text("Development notice: privacy policy and terms require legal review before App Store release. Live purchases require completed Apple and RevenueCat configuration.")
+                Text("Privacy policy and terms are drafts pending review before public release.")
             }
             Text("Signing in, free scans and account deletion do not require a purchase. Historical breach records remain after remediation.")
         }
         .navigationTitle("Subscription")
-        .task(id: model.account?.userId) { await billing.load(account: model) }
+        .refreshable { await billing.load(account: model) }
+        .task(id: "\(model.account?.userId ?? "")-\(model.isOffline)") { await billing.load(account: model) }
         .task(id: billing.ready) { await billing.observe(account: model) }
         .sheet(isPresented: $showPaywall) {
             if let offering = billing.offering {

@@ -25,6 +25,7 @@ import {
   requireAddressSlot,
   requirePremium,
 } from './lib/findings';
+import { defaultMonitoring } from './lib/monitoring-default';
 import { scanAddress } from './lib/scan';
 import {
   APIError,
@@ -629,6 +630,7 @@ export function registerRoutes(app: App) {
         session.user_id,
         quota,
       ),
+      defaultMonitoring(c.env, session.user_id, now),
     ]);
     if (!results[0]?.meta.changes)
       throw new APIError('invalid_code', 400, 'The code is incorrect, expired or already used.');
@@ -709,15 +711,14 @@ export function registerRoutes(app: App) {
       await requirePremium(c.env, session.user_id, address.email);
       await requireAddressSlot(c.env, session.user_id, address.id, address.email);
     }
-    await c.env.DB.prepare(`UPDATE monitored_emails SET monitoring_enabled = ?, monitoring_generation = monitoring_generation + 1,
-      next_check_at = ?, last_monitoring_outcome = ? WHERE id = ? AND user_id = ? AND monitoring_enabled != ?`)
+    await c.env.DB.prepare(`UPDATE monitored_emails SET monitoring_enabled = ?, monitoring_preference_set = 1, monitoring_generation = monitoring_generation + 1,
+      next_check_at = ?, last_monitoring_outcome = ? WHERE id = ? AND user_id = ?`)
       .bind(
         body.enabled ? 1 : 0,
         body.enabled ? nowSeconds() : null,
         body.enabled ? 'pending' : 'disabled',
         address.id,
         session.user_id,
-        body.enabled ? 1 : 0,
       )
       .run();
     return c.body(null, 204);
