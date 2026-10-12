@@ -147,6 +147,8 @@ A webhook named **CybrGuard staging sandbox** was registered through RevenueCat'
 
 The handler authenticates the header and app/environment, deduplicates event IDs and requests current server data instead of trusting claimed webhook expiry. Production events remain rejected. Local and staging accounts have separate UUIDs: use the staging API origin in the app to test staging webhook account updates; a local account purchase is confirmed through the local authenticated reconciliation endpoint.
 
+Staging delivery was verified on 12 October 2026 with a real RevenueCat Test Store weekly transaction in the simulator. Before purchase, the independently verified staging account had no billing snapshot. After purchase, the SDK reported active `cybrguard_pro`, D1 contained a confirmed Personal plan with `max_addresses = 3` and matching expiry, and RevenueCat's matching `INITIAL_PURCHASE` event showed first-attempt HTTP 200 with `{"received":true}`. The same event ID was present in staging's processed-event table. Purchase callbacks also reconcile, so this initial test does not isolate webhook-only renewal updates. The tester's administrative premium override remains enabled; the UI's premium label alone is not evidence of subscription enforcement. No real charge or Apple purchase occurred.
+
 ## Complete code and verification
 
 - `apps/ios/Exposure/Features/Subscription/SubscriptionView.swift`: complete observable model and SwiftUI screen, SDK configuration, customer stream, purchases, restore, Paywall, Customer Center and safe errors.
