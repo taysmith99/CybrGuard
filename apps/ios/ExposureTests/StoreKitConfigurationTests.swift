@@ -12,7 +12,7 @@ import Testing
     session.disableDialogs = true
     session.clearTransactions()
     defer { session.clearTransactions() }
-    let ids = ["app.cybrguard.personal.weekly", "app.cybrguard.personal.monthly", "app.cybrguard.family.weekly"]
+    let ids = ["weekly", "monthly", "yearly"]
     let products = try await Product.products(for: ids)
     #expect(Set(products.map(\.id)) == Set(ids))
     #expect(products.allSatisfy { !$0.displayPrice.isEmpty && $0.subscription != nil })

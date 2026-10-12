@@ -17,6 +17,8 @@ export type Bindings = EmailConfiguration & {
   REVENUECAT_SECRET_KEY?: string;
   REVENUECAT_WEBHOOK_AUTH?: string;
   REVENUECAT_APP_ID?: string;
+  REVENUECAT_PROJECT_ID?: string;
+  REVENUECAT_PRO_ENTITLEMENT_ID?: string;
   DATA_ENCRYPTION_KEY?: string;
   EMAIL_BLIND_INDEX_KEY?: string;
 };

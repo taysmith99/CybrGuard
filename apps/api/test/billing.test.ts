@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { app, type Bindings } from '../src/index';
-import { reconcileBilling, resolveBilling } from '../src/lib/billing';
+import { reconcileBilling, resolveBilling, resolveV2Billing } from '../src/lib/billing';
 import { requireAddressSlot } from '../src/lib/findings';
 import { hash } from '../src/lib/security';
 import { testDatabase } from './database';
@@ -35,6 +35,7 @@ beforeEach(() => {
     vi.fn(async (url: string | URL, options: RequestInit) => {
       calls++;
       expect(String(url)).toBe(`https://api.revenuecat.com/v1/subscribers/${user}`);
+      expect(options.redirect).toBe('manual');
       expect(options.headers).toMatchObject({ Authorization: 'Bearer fictional-secret' });
       return Response.json(payload);
     }),
@@ -271,4 +272,54 @@ it('reconciles only the authenticated account even if a client sends another use
       )
     ).status,
   ).toBe(503);
+});
+
+it('maps the configured cybrguard_pro entitlement for weekly, monthly and yearly products', async () => {
+  for (const product_identifier of ['weekly', 'monthly', 'yearly']) {
+    payload = snapshot({ cybrguard_pro: { expires_date: future(86400), product_identifier } });
+    expect(resolveBilling(payload, now)).toEqual({
+      plan: 'personal',
+      quota: 3,
+      expiresAt: now + 86400,
+    });
+    await reconcileBilling(env, user);
+    expect(
+      db.raw.prepare('SELECT max_addresses FROM premium_entitlements').get()?.max_addresses,
+    ).toBe(3);
+  }
+});
+
+it('verifies modern v2 active entitlements with trusted project and Pro entitlement IDs', async () => {
+  env.REVENUECAT_PROJECT_ID = 'project-test';
+  env.REVENUECAT_PRO_ENTITLEMENT_ID = 'entitlement-pro';
+  vi.mocked(fetch).mockImplementation(async (url) => {
+    expect(String(url)).toBe(
+      `https://api.revenuecat.com/v2/projects/project-test/customers/${user}/active_entitlements`,
+    );
+    return Response.json({
+      items: [{ entitlement_id: 'entitlement-pro', expires_at: (now + 300) * 1000 }],
+      next_page: null,
+    });
+  });
+  await reconcileBilling(env, user);
+  expect(
+    db.raw.prepare('SELECT expires_at, max_addresses FROM premium_entitlements').get(),
+  ).toMatchObject({ expires_at: now + 300, max_addresses: 3 });
+  expect(
+    resolveV2Billing(
+      { items: [{ entitlement_id: 'unrelated', expires_at: (now + 300) * 1000 }] },
+      'entitlement-pro',
+      now,
+    ).plan,
+  ).toBe('free');
+  expect(
+    resolveV2Billing(
+      { items: [{ entitlement_id: 'entitlement-pro', expires_at: now * 1000 }] },
+      'entitlement-pro',
+      now,
+    ).plan,
+  ).toBe('free');
+  expect(() =>
+    resolveV2Billing({ items: [], next_page: '/another-page' }, 'entitlement-pro', now),
+  ).toThrow();
 });

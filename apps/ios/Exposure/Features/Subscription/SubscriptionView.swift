@@ -1,6 +1,7 @@
 import ExposureCore
 import Observation
 import RevenueCat
+import RevenueCatUI
 import StoreKit
 import SwiftUI
 
@@ -9,7 +10,15 @@ final class SubscriptionModel {
     var packages: [RevenueCat.Package] = []
     var busy = false
     var message: String?
+    var paywallError: String?
     var ready = false
+    var offering: Offering?
+    var customerInfo: CustomerInfo?
+    var backendConfigured = false
+    var isTestStore = false
+    static let entitlementID = "cybrguard_pro"
+    var hasPro: Bool { customerInfo?.entitlements[Self.entitlementID]?.isActive == true }
+
 
     func load(account: ScanModel) async {
         guard !busy else { return }
@@ -18,20 +27,37 @@ final class SubscriptionModel {
         packages = []; ready = false; message = nil
         guard let userId = account.account?.userId else { message = "Sign in before purchasing or restoring a subscription."; return }
         guard let key = Bundle.main.object(forInfoDictionaryKey: "RevenueCatPublicKey") as? String,
-              key.hasPrefix("appl_"), !key.contains("$(") else {
+              (key.hasPrefix("appl_") || key.hasPrefix("test_")), !key.contains("$(") else {
             message = "Purchases are not configured yet. Apple and RevenueCat setup is still required."
             return
         }
-        guard await account.billingConfigured() else {
+        isTestStore = key.hasPrefix("test_")
+        #if !DEBUG
+        guard !isTestStore else { message = "A production Apple SDK key is required for this build."; return }
+        #endif
+        backendConfigured = await account.billingConfigured()
+        guard backendConfigured || isTestStore else {
             message = "Server subscription verification is not configured yet. Purchases are unavailable."
             return
         }
         do {
             Purchases.logLevel = .error
-            if !Purchases.isConfigured { Purchases.configure(withAPIKey: key, appUserID: userId) }
-            else if Purchases.shared.appUserID != userId { _ = try await Purchases.shared.logIn(userId) }
+            if !Purchases.isConfigured {
+                #if DEBUG
+                // The requested SPM package ships a Release-built XCFramework.
+                // Permit Test Store only when the enclosing app is a Debug build.
+                let config = Configuration.Builder(withAPIKey: key).with(appUserID: userId)
+                    .with(dangerousSettings: DangerousSettings(autoSyncPurchases: true,
+                        forceAllowTestStoreInReleaseBuilds: isTestStore)).build()
+                Purchases.configure(with: config)
+                #else
+                Purchases.configure(withAPIKey: key, appUserID: userId)
+                #endif
+            } else if Purchases.shared.appUserID != userId { _ = try await Purchases.shared.logIn(userId) }
+            customerInfo = try await Purchases.shared.customerInfo()
             let offerings = try await Purchases.shared.offerings()
-            packages = offerings.current?.availablePackages ?? []
+            offering = offerings.current
+            packages = offering?.availablePackages ?? []
             ready = true
             if packages.isEmpty { message = "No subscription offerings are currently available. You can still restore an existing purchase." }
         } catch { message = "Subscription options could not be loaded. Try again later." }
@@ -45,8 +71,7 @@ final class SubscriptionModel {
             let result = try await Purchases.shared.purchase(package: package)
             guard account.account?.userId == userId else { message = "Sign in to the original account to confirm this purchase."; return }
             if result.userCancelled { message = "Purchase cancelled."; return }
-            if await account.reconcileSubscription() { message = "Purchase checked with the server. Your account access is updated." }
-            else { message = "Apple purchase completed. Server confirmation is pending; try Restore purchases or Refresh access." }
+            await accept(result.customerInfo, account: account)
         } catch { message = "The purchase could not be completed. No access has been granted by the app." }
     }
 
@@ -55,11 +80,37 @@ final class SubscriptionModel {
         busy = true; message = nil
         defer { busy = false }
         do {
-            _ = try await Purchases.shared.restorePurchases()
+            let info = try await Purchases.shared.restorePurchases()
             guard account.account?.userId == userId else { message = "Sign in to the original account to confirm restored purchases."; return }
-            if await account.reconcileSubscription() { message = "Restore checked with the server. Your account access is updated." }
-            else { message = "Restore finished with Apple; server confirmation is pending. Try Refresh access." }
+            await accept(info, account: account)
         } catch { message = "Purchases could not be restored. Try again later." }
+    }
+
+    func accept(_ info: CustomerInfo, account: ScanModel) async {
+        guard Purchases.isConfigured, Purchases.shared.appUserID == account.account?.userId else { return }
+        customerInfo = info
+        if backendConfigured {
+            message = await account.reconcileSubscription()
+                ? "Subscription checked with the server. Your account access is updated."
+                : "RevenueCat updated. Server confirmation is pending; try Refresh access."
+        } else {
+            message = "Test Store updated in RevenueCat. Backend access still requires server-side RevenueCat configuration."
+        }
+    }
+
+    func observe(account: ScanModel) async {
+        guard ready, let userId = account.account?.userId else { return }
+        for await info in Purchases.shared.customerInfoStream {
+            guard !Task.isCancelled, account.account?.userId == userId,
+                  Purchases.shared.appUserID == userId else { return }
+            customerInfo = info
+        }
+    }
+
+    func refreshCustomer(account: ScanModel) async {
+        guard ready, !busy, Purchases.shared.appUserID == account.account?.userId else { return }
+        do { await accept(try await Purchases.shared.customerInfo(fetchPolicy: .fetchCurrent), account: account) }
+        catch { message = "Customer information could not be refreshed. Try again later." }
     }
 
     static func period(_ product: StoreProduct) -> String {
@@ -79,13 +130,29 @@ final class SubscriptionModel {
 struct SubscriptionView: View {
     let model: ScanModel
     @State private var billing = SubscriptionModel()
+    @State private var showPaywall = false
+    @State private var showCustomerCenter = false
     var body: some View {
         List {
             Section("Your access") {
+                if billing.ready { LabeledContent("RevenueCat Pro entitlement", value: billing.hasPro ? "Active" : "Inactive") }
+                if billing.isTestStore { Text("RevenueCat Test Store — simulated purchases, no real charges.").font(.footnote) }
                 Text("Current account access: \(model.account?.tier ?? "signed out")")
-                Text("Free access includes one verified address and its known breach count. Personal supports up to 3 verified emails; Family supports up to 15. Paid access includes breach details, remediation tracking and opt-in daily checks.")
+                Text("Free access includes one verified address and its known breach count. CybrGuard Pro supports up to 3 verified emails. Paid access includes breach details, remediation tracking and opt-in daily checks.")
             }
             Section("Subscription options") {
+                Button("View RevenueCat Paywall") { showPaywall = true }
+                    .disabled(!billing.ready || billing.offering == nil || billing.busy || model.isBusy)
+                Button("Manage subscription in Customer Center") { showCustomerCenter = true }
+                    .disabled(!billing.ready || billing.busy || model.isBusy)
+                Button("Refresh RevenueCat customer info") { Task { await billing.refreshCustomer(account: model) } }
+                    .disabled(!billing.ready || billing.busy || model.isBusy)
+                if billing.busy { ProgressView("Contacting subscription service…") }
+                if let message = billing.message { Text(message) }
+                Button("Reload subscription options") { Task { await billing.load(account: model) } }.disabled(billing.busy || model.isBusy)
+                Button("Restore purchases") { Task { await billing.restore(account: model) } }.disabled(!billing.ready || billing.busy || model.isBusy)
+                Button("Refresh access") { Task { _ = await model.reconcileSubscription() } }.disabled(billing.busy || model.isBusy || !model.isSignedIn)
+                if let message = model.message { Text(message).foregroundStyle(.red) }
                 ForEach(billing.packages, id: \.identifier) { package in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(package.storeProduct.localizedTitle).font(.headline)
@@ -94,12 +161,6 @@ struct SubscriptionView: View {
                             .disabled(billing.busy || model.isBusy || !billing.ready)
                     }.buttonStyle(.borderless)
                 }
-                if billing.busy { ProgressView("Contacting subscription service…") }
-                if let message = billing.message { Text(message) }
-                Button("Reload subscription options") { Task { await billing.load(account: model) } }.disabled(billing.busy || model.isBusy)
-                Button("Restore purchases") { Task { await billing.restore(account: model) } }.disabled(!billing.ready || billing.busy || model.isBusy)
-                Button("Refresh access") { Task { _ = await model.reconcileSubscription() } }.disabled(billing.busy || model.isBusy || !model.isSignedIn)
-                if let message = model.message { Text(message).foregroundStyle(.red) }
             }
             Section("Billing terms") {
                 NavigationLink("Privacy") {
@@ -117,5 +178,23 @@ struct SubscriptionView: View {
         }
         .navigationTitle("Subscription")
         .task(id: model.account?.userId) { await billing.load(account: model) }
+        .task(id: billing.ready) { await billing.observe(account: model) }
+        .sheet(isPresented: $showPaywall) {
+            if let offering = billing.offering {
+                PaywallView(offering: offering, displayCloseButton: true)
+                    .onPurchaseCompleted { info in Task { await billing.accept(info, account: model) } }
+                    .onRestoreCompleted { info in Task { await billing.accept(info, account: model) } }
+                    .onPurchaseFailure { _ in billing.paywallError = "The purchase could not be completed. Try again later."; billing.message = billing.paywallError }
+                    .onRestoreFailure { _ in billing.paywallError = "Purchases could not be restored. Try again later."; billing.message = billing.paywallError }
+                    .alert("Subscription request failed", isPresented: Binding(
+                        get: { billing.paywallError != nil },
+                        set: { if !$0 { billing.paywallError = nil } }
+                    )) { Button("OK") { billing.paywallError = nil } }
+                    message: { Text(billing.paywallError ?? "Try again later.") }
+            }
+        }
+        .sheet(isPresented: $showCustomerCenter, onDismiss: { Task { await billing.refreshCustomer(account: model) } }) {
+            CustomerCenterView()
+        }
     }
 }

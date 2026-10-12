@@ -26,18 +26,18 @@
           "codeOffers": [],
           "displayPrice": "4.99",
           "familyShareable": false,
-          "groupNumber": 2,
+          "groupNumber": 1,
           "internalID": "1001",
           "localizations": [
             {
               "description": "Local fictional subscription test only",
-              "displayName": "CybrGuard Personal Weekly",
+              "displayName": "CybrGuard Pro Weekly",
               "locale": "en_AU"
             }
           ],
-          "productID": "app.cybrguard.personal.weekly",
+          "productID": "weekly",
           "recurringSubscriptionPeriod": "P1W",
-          "referenceName": "personal.weekly",
+          "referenceName": "weekly",
           "subscriptionGroupID": "1000",
           "type": "RecurringSubscription",
           "introductoryOffer": {
@@ -52,38 +52,38 @@
           "codeOffers": [],
           "displayPrice": "14.99",
           "familyShareable": false,
-          "groupNumber": 2,
+          "groupNumber": 1,
           "internalID": "1002",
           "localizations": [
             {
               "description": "Local fictional subscription test only",
-              "displayName": "CybrGuard Personal Monthly",
+              "displayName": "CybrGuard Pro Monthly",
               "locale": "en_AU"
             }
           ],
-          "productID": "app.cybrguard.personal.monthly",
+          "productID": "monthly",
           "recurringSubscriptionPeriod": "P1M",
-          "referenceName": "personal.monthly",
+          "referenceName": "monthly",
           "subscriptionGroupID": "1000",
           "type": "RecurringSubscription"
         },
         {
           "adHocOffers": [],
           "codeOffers": [],
-          "displayPrice": "7.99",
+          "displayPrice": "59.99",
           "familyShareable": false,
           "groupNumber": 1,
           "internalID": "1003",
           "localizations": [
             {
               "description": "Local fictional subscription test only",
-              "displayName": "CybrGuard Family Weekly",
+              "displayName": "CybrGuard Pro Yearly",
               "locale": "en_AU"
             }
           ],
-          "productID": "app.cybrguard.family.weekly",
-          "recurringSubscriptionPeriod": "P1W",
-          "referenceName": "family.weekly",
+          "productID": "yearly",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "yearly",
           "subscriptionGroupID": "1000",
           "type": "RecurringSubscription"
         }

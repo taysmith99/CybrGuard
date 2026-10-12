@@ -20,6 +20,7 @@ export function resolveBilling(payload: unknown, now: number): BillingPlan {
     throw new APIError('provider_bad_response', 502, 'Subscription status could not be verified.');
   for (const [id, plan, quota] of [
     ['monitoring_family', 'family', 15],
+    ['cybrguard_pro', 'personal', 3],
     ['monitoring_personal', 'personal', 3],
   ] as const) {
     const value = result.data.subscriber.entitlements[id];
@@ -40,6 +41,35 @@ export function resolveBilling(payload: unknown, now: number): BillingPlan {
   return { plan: 'free', quota: 1, expiresAt: null };
 }
 
+export function resolveV2Billing(
+  payload: unknown,
+  entitlementId: string,
+  now: number,
+): BillingPlan {
+  const parsed = z
+    .object({
+      items: z.array(
+        z.object({
+          entitlement_id: z.string(),
+          expires_at: z.number().int().nonnegative().nullable(),
+        }),
+      ),
+      next_page: z.string().nullable().optional(),
+    })
+    .safeParse(payload);
+  if (!parsed.success || parsed.data.next_page)
+    throw new APIError('provider_bad_response', 502, 'Subscription status could not be verified.');
+  const active = parsed.data.items.find(
+    (item) =>
+      item.entitlement_id === entitlementId &&
+      item.expires_at !== null &&
+      item.expires_at > now * 1000,
+  );
+  return active?.expires_at
+    ? { plan: 'personal', quota: 3, expiresAt: Math.floor(active.expires_at / 1000) }
+    : { plan: 'free', quota: 1, expiresAt: null };
+}
+
 export function requireBillingConfiguration(env: Bindings) {
   if (!env.REVENUECAT_SECRET_KEY)
     throw new APIError('configuration_error', 503, 'Subscriptions are not configured yet.');
@@ -47,6 +77,12 @@ export function requireBillingConfiguration(env: Bindings) {
 
 export async function reconcileBilling(env: Bindings, userId: string) {
   requireBillingConfiguration(env);
+  if (!!env.REVENUECAT_PROJECT_ID !== !!env.REVENUECAT_PRO_ENTITLEMENT_ID)
+    throw new APIError(
+      'configuration_error',
+      503,
+      'RevenueCat project and entitlement IDs must both be configured.',
+    );
   const now = Math.floor(Date.now() / 1000);
   const token = crypto.randomUUID();
   await env.DB.prepare(
@@ -69,29 +105,36 @@ export async function reconcileBilling(env: Bindings, userId: string) {
     try {
       const request = fetch;
       response = await request(
-        `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+        env.REVENUECAT_PROJECT_ID
+          ? `https://api.revenuecat.com/v2/projects/${encodeURIComponent(env.REVENUECAT_PROJECT_ID)}/customers/${encodeURIComponent(userId)}/active_entitlements`
+          : `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
         {
           headers: {
             Authorization: `Bearer ${env.REVENUECAT_SECRET_KEY}`,
             Accept: 'application/json',
           },
-          redirect: 'error',
+          redirect: 'manual',
           signal: AbortSignal.timeout(20_000),
         },
       );
     } catch {
+      console.warn(JSON.stringify({ event: 'billing_lookup_network_failure' }));
       throw new APIError(
         'provider_unavailable',
         503,
         'Subscription verification is unavailable. Try again later.',
       );
     }
-    if (!response.ok)
+    if (!response.ok) {
+      console.warn(
+        JSON.stringify({ event: 'billing_lookup_http_failure', status: response.status }),
+      );
       throw new APIError(
         'provider_unavailable',
         503,
         'Subscription verification is unavailable. Try again later.',
       );
+    }
     let payload: unknown;
     try {
       payload = await response.json();
@@ -102,7 +145,9 @@ export async function reconcileBilling(env: Bindings, userId: string) {
         'Subscription status could not be verified.',
       );
     }
-    const resolved = resolveBilling(payload, now);
+    const resolved = env.REVENUECAT_PROJECT_ID
+      ? resolveV2Billing(payload, env.REVENUECAT_PRO_ENTITLEMENT_ID as string, now)
+      : resolveBilling(payload, now);
     // Cap offline access at 24 hours; scheduled reconciliation refreshes this
     // snapshot. A provider failure preserves the existing confirmed snapshot.
     const effectiveExpiry = Math.min(resolved.expiresAt ?? 0, now + 86400);

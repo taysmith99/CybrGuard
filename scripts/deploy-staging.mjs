@@ -78,7 +78,13 @@ async function main() {
     XON_API_KEY: source.XON_API_KEY.trim(),
     CLOUDFLARE_EMAIL_API_TOKEN: source.CLOUDFLARE_EMAIL_TOKEN.trim(),
   };
-  for (const name of ['REVENUECAT_SECRET_KEY', 'REVENUECAT_WEBHOOK_AUTH', 'REVENUECAT_APP_ID']) {
+  for (const name of [
+    'REVENUECAT_SECRET_KEY',
+    'REVENUECAT_WEBHOOK_AUTH',
+    'REVENUECAT_APP_ID',
+    'REVENUECAT_PROJECT_ID',
+    'REVENUECAT_PRO_ENTITLEMENT_ID',
+  ]) {
     const value = source[name]?.trim() || secrets[name]?.trim();
     if (value) runtime[name] = value;
   }
